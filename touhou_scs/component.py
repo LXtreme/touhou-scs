@@ -668,13 +668,14 @@ class Multitarget:
             component = Component(f"BinaryBase_{power}", unknown_g(), 4)
             component.assert_spawn_order(False)
             # To add support for more parameters, add a new empty group and follow the pattern
-            num_emptys = 4
+            num_emptys = 5
             for i in range(0, power * num_emptys, num_emptys):
                 rb = (util.Remap()
                     .pair(enum.EMPTY_BULLET, i + 6001)
                     .pair(enum.EMPTY_TARGET_GROUP, i + 6002)
                     .pair(enum.EMPTY1, i + 6003)
-                    .pair(enum.EMPTY_EMITTER, i + 6004))
+                    .pair(enum.EMPTY_EMITTER, i + 6004)
+                    .pair(enum.EMPTY_COLLISION, i + 6005))
                 component.Spawn(0, enum.EMPTY_MULTITARGET, True, remap=rb.build())
             cls._binary_bases[power] = component
 
@@ -926,10 +927,12 @@ class InstantPatterns:
 
         def remap_arc(remap_pairs: dict[int, int], remap: util.Remap):
             nonlocal bulletPos
+            bullet_group, bullet_col = bullet.next()
             for source, target in remap_pairs.items():
                 if source == enum.EMPTY_BULLET:
-                    bullet_group, _ = bullet.next()
                     remap.pair(target, bullet_group)
+                elif source == enum.EMPTY_COLLISION:
+                    remap.pair(target, bullet_col)
                 elif source == enum.EMPTY_TARGET_GROUP:
                     # Convert 0-359 range to 1-360 for GuiderCircle indexing
                     angle_index = bulletPos if bulletPos > 0 else 360
@@ -1012,11 +1015,13 @@ class InstantPatterns:
         bullet_groups: list[int] = []
 
         def remap_line(remap_pairs: dict[int, int], remap: util.Remap):
+            bullet_group, bullet_col = bullet.next()
             for source, target in remap_pairs.items():
                 if source == enum.EMPTY_BULLET:
-                    bullet_group, _ = bullet.next()
                     bullet_groups.append(bullet_group)
                     remap.pair(target, bullet_group)
+                elif source == enum.EMPTY_COLLISION:
+                    remap.pair(target, bullet_col)
                 elif source == enum.EMPTY_EMITTER:
                     remap.pair(target, emitter)
                 else:

@@ -12,6 +12,7 @@ GRAZE_FUNCTION = 34
 PLR_HURT_FUNCTION = 35
 DESPAWN_FUNCTION = 27 #PLR_HURT calls despawn in level, BOMB_HURT calls directly in code
 ENEMY_HITBOX = 5 # shared for every enemy
+GLOBAL_COLLISIONS = 17
 
 ppt = enum.Properties
 
@@ -75,22 +76,23 @@ def add_plr_collisions():
     )
 
     placeholder = unknown_g() # never called, just fulfills comp param requirement
-    ppt = enum.Properties
     def add_collision_trigger_remaps(bullet: lib.BulletPool, name: str):
         # Called on level startup
-        global_col = Component(f"[{name}]: Bullet Collision remap wrappers", 17, editorLayer=4) \
+        global_col = Component(
+            f"[{name}]: Bullet Collision remap wrappers", GLOBAL_COLLISIONS, editorLayer=4) \
             .assert_spawn_order(False)
         # Each trigger in here is called individually, grouped for convenience/logging
         plr_hit_col = Component(f"[{name}]: PlrHit Collisions", placeholder, editorLayer=4) \
             .assert_spawn_order(False)
 
-        for bullet_hitbox in range(bullet.min_group, bullet.max_group+ 1):
+        for bullet_hitbox in range(bullet.min_group, bullet.max_group + 1):
+            bullet_col = bullet_hitbox + (bullet.max_group - bullet.min_group + 1)
             # permanently turns on all collisions for each bullet (level calls it on startup)
             global_col_spawn = global_col.create_trigger(enum.ObjectID.SPAWN, 0, cols.caller)
             global_col_spawn[ppt.REMAP_STRING] = f"{enum.EMPTY_BULLET}.{bullet_hitbox}"
             global_col.triggers.append(global_col_spawn)
             # Give each bullet a spawn trigger that activates its own collisions
-            with plr_hit_col.temp_context(groups=bullet_hitbox):
+            with plr_hit_col.temp_context(groups=[bullet_hitbox, bullet_col]):
                 plr_hit_col_spawn = plr_hit_col.create_trigger(enum.ObjectID.SPAWN, 0, PLR_HURT_FUNCTION)
                 plr_hit_col_spawn[ppt.REMAP_STRING] = f"{enum.EMPTY_BULLET}.{bullet_hitbox}"
                 plr_hit_col.triggers.append(plr_hit_col_spawn)
@@ -100,7 +102,7 @@ def add_plr_collisions():
     add_collision_trigger_remaps(lib.bullet3, "B3")
     add_collision_trigger_remaps(lib.bullet4, "B4")
 
-    (Component("Enemy-dmg-Player Collisions", 17, editorLayer=7)
+    (Component("Enemy-dmg-Player Collisions", GLOBAL_COLLISIONS, editorLayer=7)
         .assert_spawn_order(False)
         # WARNING: its using empties without remaps
         # (since not remapping PLR_HIT_FUNCTION and therefore not remapping DESPAWN_FUNCTION)
@@ -133,7 +135,7 @@ def add_enemy_collisions():
         .clear_context()
     )
 
-    global_col = Component("Enemy Collision remap wrappers for PlrBullets", 17, editorLayer=4) \
+    global_col = Component("Enemy Collision remap wrappers for PlrBullets", GLOBAL_COLLISIONS, editorLayer=4) \
         .assert_spawn_order(False)
 
     for enemy in enemy_groups:
@@ -164,7 +166,6 @@ despawn1 = (Component("PlrBullet Despawn 1", unknown_g(), editorLayer=6)
         .Toggle(1, False)
     .clear_context()
 )
-
 
 despawn2 = (Component("EnemyBullet Despawn 2", unknown_g(), editorLayer=6)
     .assert_spawn_order(True)

@@ -133,9 +133,8 @@ class BulletPool:
         if self.current > self.max_group:
             self.current = self.min_group
 
-        bullet = self.current
-        collision = self.max_group + bullet
-        return bullet, collision
+        collision = self.current + (self.max_group - self.min_group + 1)
+        return self.current, collision
 
 
 bullet1 = BulletPool(501, 1000, True)

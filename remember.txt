@@ -43,6 +43,13 @@ TODO:
 
 - Minor Optimization: Cache 'enforce_solid_groups' if used multiple times for the same groups
 
+- (consider) Refactor Multitarget to instead of requiring a callback function, require an int dict with the values being functions that return ints. This way instead of having to write pattern matching args, the dict can be the pattern matching.
+Example:
+{
+  "pattern1": function that returns int (group to remap to),
+  ...
+}
+
 - Add basic Bombing (keybind + texture)
 
 - Add rounding to 6 significant digits to trigger spread 

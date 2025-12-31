@@ -219,6 +219,7 @@ EMPTY1: Final[int] = 21
 EMPTY2: Final[int] = 23
 EMPTY_EMITTER: Final[int] = 24
 EMPTY_BULLET: Final[int] = 10
+EMPTY_COLLISION: Final[int] = 104
 EMPTY_TARGET_GROUP: Final[int] = 20
 
 EMPTY_MULTITARGET: Final[int] = 25 # Restricted; multitarget exclusive
