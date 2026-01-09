@@ -106,7 +106,6 @@ class ComponentProtocol(Protocol):
     requireSpawnOrder: bool | None
     triggers: list[Trigger]
     target: int
-    used_pointers: dict[int, int]
     current_pc: Any
 
     def assert_spawn_order(self, required: bool) -> "ComponentProtocol":

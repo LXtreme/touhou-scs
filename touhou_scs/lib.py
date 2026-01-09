@@ -77,27 +77,65 @@ def rgb(r: float, g: float, b: float) -> HSB:
 # ============================================================================
 
 class GuiderCircle:
-    """Circle of 360 pointer objects for angle-based aiming"""
+    """
+    Circle of 1080 pointer objects for angle-based aiming (1/3 degree precision):
+    - Circle1: Pre-allocated.
+    - Lazy (point == 0): Initializes with zeros, allocates on-demand via angle_to_groups
+    """
+    PRECISION = 1080
 
-    def __init__(self,
-        center: int, pointer: int, all_group: int = 0, populate_groups: list[int] | None = None):
-        populate_groups = populate_groups or []
-        self.all: int = all_group
-        self.center: int = center
-        self.pointer: int = pointer
-        self.groups: dict[int, int] = {}
+    def __init__(self, center: int, point: int, all_group: int = 0):
+        self.all = all_group
+        self.center = center
+        self.point = point  # direction that the guidercircle points
 
-        # Populate groups[1..360] = pointer + (i-1)
-        if populate_groups:
-            if len(populate_groups) != 360:
-                raise ValueError("GuiderCircle: populate_groups must have exactly 360 entries!")
-            for i in range(1, 361):
-                self.groups[i] = populate_groups[i - 1]
+        if point > 0: # Circle1
+            self.groups = [point + i for i in range(self.PRECISION)]
         else:
-            for i in range(1, 361):
-                self.groups[i] = self.pointer + (i - 1)
+            self.groups = [0] * self.PRECISION
 
-circle1 = GuiderCircle(all_group=5461, center=5461, pointer=5101)
+    def angle_to_groups(self, startAngle: float, endAngle: float, numPoints: int, closed_circle: bool = False):
+        """Convert angles to guidercircle groups, snapping to grid.
+
+        Lazily allocates pointers from the pointer pool if not already allocated.
+        Returns list of pointer groups corresponding to the requested angles.
+
+        Args:
+            startAngle: Starting angle in degrees
+            endAngle: Ending angle in degrees
+            numPoints: Number of points to distribute
+            closed_circle: If True, distributes points evenly without including endAngle
+                          (for radial patterns). If False, includes both start and end
+                          (for arc patterns).
+        """
+        if numPoints < 2:
+            raise ValueError("GuiderCircle.angle_to_groups: numPoints must be at least 2")
+
+        points_per_degree = self.PRECISION / 360
+        arc_length = endAngle - startAngle
+
+        if closed_circle:
+            # For closed circles (radials), distribute evenly without overlapping start/end
+            spacing = arc_length / numPoints
+        else:
+            # For arcs, include both endpoints
+            spacing = arc_length / (numPoints - 1)
+
+        original_angles = [startAngle + (spacing * i) for i in range(numPoints)]
+
+        groups: list[int] = []
+        for orig_angle in original_angles:
+            index = round(orig_angle * points_per_degree) % self.PRECISION
+
+            # Lazy allocation: if groups[index] is 0, allocate a new pointer
+            if self.groups[index] == 0:
+                self.groups[index] = pointer.next()[0]
+
+            groups.append(self.groups[index])
+
+        return groups
+
+circle1 = GuiderCircle(center=6181, point=5101, all_group=6181)
 
 class GuiderLine:
     """Odd number of pointer objects aligned in a straight line"""
@@ -138,7 +176,7 @@ class BulletPool:
 
 
 bullet1 = BulletPool(501, 1000, True)
-bullet2 = BulletPool(1501, 2200, False)
+bullet2 = BulletPool(1501, 2200, True)
 bullet3 = BulletPool(2901, 3600, False)
 bullet4 = BulletPool(4301, 4700, False)
 

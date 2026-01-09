@@ -71,6 +71,7 @@ def translate_remap_string(remap_string: str) -> tuple[dict[int, int], str]:
 
     pairs: dict[int, int] = {}
     clean_parts: list[str] = []
+    redundant_mappings: list[str] = []
     for i in range(0, parts_len, 2):
         source_str = parts[i]
         target_str = parts[i + 1]
@@ -84,11 +85,13 @@ def translate_remap_string(remap_string: str) -> tuple[dict[int, int], str]:
         if source != target:
             clean_parts.append(source_str)
             clean_parts.append(target_str)
+        else:
+            redundant_mappings.append(f"{source}->{target}")
 
     clean_string = ".".join(clean_parts)
 
     if clean_string != remap_string:
-        warn(f"Remap string had redundant mappings:\n{remap_string}")
+        warn(f"Remap string had redundant identity mappings: {', '.join(redundant_mappings)}\nFull string:\n{remap_string}")
     if len(clean_string) == 0:
         raise ValueError(f"Remap string is empty after cleaning redundant mappings: \n {remap_string}")
 

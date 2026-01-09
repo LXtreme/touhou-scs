@@ -35,8 +35,8 @@ def add_disable_all_bullets():
         list(range(lib.bullet1.min_group, lib.bullet1.max_group + 1)) +
         list(range(lib.bullet2.min_group, lib.bullet2.max_group + 1)) +
         list(range(lib.bullet3.min_group, lib.bullet3.max_group + 1)) +
-        list(range(lib.bullet4.min_group, lib.bullet4.max_group + 1)) +
-        list(range(lib.pointer.min_group, lib.pointer.max_group + 1))
+        list(range(lib.bullet4.min_group, lib.bullet4.max_group + 1))
+        # list(range(lib.pointer.min_group, lib.pointer.max_group + 1))
     )
 
     bullet_iter = iter(bullet_groups)

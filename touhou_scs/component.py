@@ -7,7 +7,6 @@ URGENT: SpellBuilder is not yet implemented! stuff is commented out until then.
 """
 
 from __future__ import annotations
-from collections import OrderedDict
 from contextlib import contextmanager
 import functools
 from typing import Any, Callable, NamedTuple
@@ -149,7 +148,6 @@ class Component:
         self.requireSpawnOrder: bool | None = None
         self.triggers: list[Trigger] = []
         self.current_pc: lib.GuiderCircle | None = None
-        self.used_pointers: dict[int, int] = OrderedDict()
 
         self._pointer: Pointer | None = None
         self._instant: InstantPatterns | None = None
@@ -720,12 +718,6 @@ class _PointerMgr:
     setup_pointercircle: Component | None = None
     align_north: Component | None = None
     follow_comps: dict[int, Component] = {}
-    freed_pointers: list[int] = []
-
-    @classmethod
-    def next_pointer(cls) -> int:
-        if cls.freed_pointers: return cls.freed_pointers.pop()
-        else: return lib.pointer.next()[0]
 
     @classmethod
     def get_setup_comp(cls) -> Component:
@@ -765,7 +757,7 @@ class Pointer:
             raise RuntimeError(f"Component '{self._component.name}' has no active pointer circle")
         return self._component.current_pc.center
 
-    def SetPointerCircle(self, time: float, gc: lib.GuiderCircle, *,
+    def SetPointerCircle(self, time: float, *,
         location: int, duration: int = 0, align_north: bool = True):
         """
         Create a temporary Pointer-based GuiderCircle.
@@ -780,14 +772,11 @@ class Pointer:
             print("Patterns.SetPointerCircle: Overwriting existing GuiderCircle")
             self.CleanPointerCircle()
 
-        circle: list[int] = [_PointerMgr.next_pointer() for _ in range(360)]
-
-        pc = lib.GuiderCircle(
-            center=lib.pointer.next()[0], pointer=circle[0], populate_groups=circle)
+        pc = lib.GuiderCircle(center=lib.pointer.next()[0], point=0)
 
         self._component.current_pc = pc
 
-        self._params = (time, gc, location, duration, align_north)
+        self._params = (time, location, duration, align_north)
         return self._component
 
     def CleanPointerCircle(self):
@@ -795,25 +784,24 @@ class Pointer:
         if self._component.current_pc is None:
             raise RuntimeError("Patterns.CleanPointerCircle: No active GuiderCircle to clean")
 
-        _PointerMgr.freed_pointers.extend([
-            p for p in self._component.current_pc.groups.values()
-            if p not in self._component.used_pointers.values()
-        ])
-
-        time, gc, location, duration, align_north = self._params
+        time, location, duration, align_north = self._params
+        gc = lib.circle1
 
         # Move original guidercircle into position
         with self._component.temp_context(target=gc.all):
             self._component.GotoGroup(time - enum.TICK*2, location)
             if align_north:
                 self._component.PointToGroup(time - enum.TICK*2, enum.NORTH_GROUP)
-
-        remaining = len(self._component.used_pointers)
-        angle_iter = iter(self._component.used_pointers)
+        
+        groups = [(i, g) for i, g in enumerate(self._component.current_pc.groups) if g != 0]
+        
+        remaining = len(groups)
+        iter = 0
 
         def remap_goto(remap_pairs: dict[int, int], remap: util.Remap):
-            angle = next(angle_iter)
-            pointer = self._component.used_pointers[angle]
+            nonlocal iter
+            nonlocal groups
+            angle, pointer = groups[iter]
             for source, target in remap_pairs.items():
                 if source == enum.EMPTY_BULLET:
                     remap.pair(target, pointer)
@@ -821,6 +809,7 @@ class Pointer:
                     remap.pair(target, gc.groups[angle])
                 else:
                     remap.pair(target, enum.EMPTY_MULTITARGET)
+            iter += 1
 
         while remaining > 0:
             batch_size = 64 if remaining > 127 else remaining
@@ -836,16 +825,17 @@ class Pointer:
         if duration == 0:
             self._params = tuple()
             self._component.current_pc = None
-            self._component.used_pointers = OrderedDict()
             return self._component
 
         follow_comp = _PointerMgr.get_follow_comp(duration)
 
-        remaining = len(self._component.used_pointers)
-        angle_iter = iter(self._component.used_pointers)
+        remaining = len(groups)
+        iter = 0
 
         def remap_follow(remap_pairs: dict[int, int], remap: util.Remap):
-            pointer = self._component.used_pointers[next(angle_iter)]
+            nonlocal iter
+            nonlocal groups
+            _, pointer = groups[iter]
             for source, target in remap_pairs.items():
                 if source == enum.EMPTY_BULLET:
                     remap.pair(target, pointer)
@@ -853,6 +843,7 @@ class Pointer:
                     remap.pair(target, pointer_center)
                 else:
                     remap.pair(target, enum.EMPTY_MULTITARGET)
+            iter += 1
 
         while remaining > 0:
             batch_size = 64 if remaining > 127 else remaining
@@ -863,7 +854,6 @@ class Pointer:
 
         self._params = tuple()
         self._component.current_pc = None
-        self._component.used_pointers = OrderedDict()
         return self._component
 
 
@@ -873,7 +863,7 @@ class InstantPatterns:
 
 
     def Arc(self, time: float, comp: Component, bullet: lib.BulletPool, *,
-        numBullets: int, spacing: int, centerAt: float = 0, _radialBypass: bool = False):
+        numBullets: int, angle: float, centerAt: float = 0, _radialBypass: bool = False):
         """
         Arc pattern - partial circle of bullets
 
@@ -886,65 +876,39 @@ class InstantPatterns:
             requires={enum.EMPTY_BULLET, enum.EMPTY_TARGET_GROUP },
             excludes={enum.EMPTY_MULTITARGET}
         )
-
-        # Arc logic checks
-        if not _radialBypass:
-            if numBullets % 2 != 0 and not centerAt.is_integer():
-                raise ValueError(f"{IA} odd bullets requires integer centerAt")
-            if numBullets % 2 == 0 and spacing % 2 != 0 and centerAt.is_integer():
-                raise ValueError(f"{IA} even bullets with odd spacing requires .5 centerAt")
-            if numBullets % 2 == 0 and spacing % 2 == 0 and not centerAt.is_integer():
-                raise ValueError(f"{IA} even bullets with even spacing requires integer centerAt")
-        # data restriction checks
-        if not centerAt.is_integer() and not (centerAt * 2).is_integer():
-            raise ValueError(f"{IA} centerAt must be an integer or integer.5")
-        if not (1 <= spacing <= 360):
-            raise ValueError(f"{IA} spacing must be between 1 and 360 degrees")
-        if not (1 <= numBullets <= 360):
-            raise ValueError(f"{IA} numBullets must be between 1 and 360")
-        if numBullets * spacing > 360:
-            raise ValueError(f"{IA} numBullets {numBullets} times spacing {spacing} exceeds 360°")
-        if numBullets * spacing == 360 and not _radialBypass:
-            warn(f"{IA} numBullets {numBullets} times spacing {spacing} is 360°, making a circle. \nFIX: Use instant.Radial() instead")
-
-        # Calculate Arc positioning
-        arclength = (numBullets - 1) * spacing
-
-        startpos = 0
-        if _radialBypass: startpos = centerAt
-        else: startpos = centerAt - arclength / 2
-        assert startpos.is_integer(), \
-            f"FATAL: startpos {startpos} not int. centerAt={centerAt}, arclength={arclength}"
-
-        # normalize startpos to [0, 360) range
-        startpos = startpos % 360
-        if startpos < 0: startpos += 360
-
-        bulletPos = int(startpos)
+        
+        # Validate angle and centerAt
+        if not (0 < angle <= 360):
+            raise ValueError(f"{IA} angle must be between 0 (exclusive) and 360 (inclusive). Got: {angle}")
+        if not (0 <= centerAt < 360):
+            raise ValueError(f"{IA} centerAt must be between 0 (inclusive) and 360 (exclusive). Got: {centerAt}")
+        
         pc = self._component.current_pc
         if pc is None:
-            raise RuntimeError(f"{IA} requires an active PointerCircle in the component")
+            raise RuntimeError(f"{IA} requires an active PointerCircle in the component.")
+
+        startAngle = centerAt - angle / 2
+        endAngle = centerAt + angle / 2
+        groups = pc.angle_to_groups(startAngle, endAngle, numBullets, _radialBypass)
+        iter = 0
 
         def remap_arc(remap_pairs: dict[int, int], remap: util.Remap):
-            nonlocal bulletPos
+            nonlocal iter
+            nonlocal groups
             bullet_group, bullet_col = bullet.next()
+            pointer = groups[iter]
             for source, target in remap_pairs.items():
                 if source == enum.EMPTY_BULLET:
                     remap.pair(target, bullet_group)
                 elif source == enum.EMPTY_COLLISION:
                     remap.pair(target, bullet_col)
                 elif source == enum.EMPTY_TARGET_GROUP:
-                    # Convert 0-359 range to 1-360 for GuiderCircle indexing
-                    angle_index = bulletPos if bulletPos > 0 else 360
-                    remap.pair(target, pc.groups[angle_index])
-                    self._component.used_pointers[angle_index] = pc.groups[angle_index]
+                    remap.pair(target, pointer)
                 elif source == enum.EMPTY_EMITTER:
                     remap.pair(target, pc.center)
                 else:
                     remap.pair(target, enum.EMPTY_MULTITARGET)
-
-            bulletPos += spacing
-            if bulletPos >= 360: bulletPos -= 360
+            iter += 1
 
         Multitarget.spawn_with_remap(self._component, time, numBullets, comp, remap_arc)
 
@@ -965,6 +929,10 @@ class InstantPatterns:
             excludes={enum.EMPTY_MULTITARGET}
         )
 
+        # Validate centerAt
+        if not (0 <= centerAt < 360):
+            raise ValueError(f"{IR} centerAt must be between 0 (inclusive) and 360 (exclusive). Got: {centerAt}")
+
         if spacing and numBullets:
             if numBullets != int(360 / spacing):
                 raise ValueError(f"{IR} spacing and numBullets don't match!\n\n"
@@ -975,13 +943,8 @@ class InstantPatterns:
         elif numBullets: spacing = int(360 / numBullets)
         else: raise ValueError(f"{IR} must provide either spacing or numBullets")
 
-        if 360 % spacing != 0:
-            raise ValueError(f"{IR} spacing must be a factor of 360 for perfect circles. Received: {spacing}")
-        elif 360 % numBullets != 0:
-            raise ValueError(f"{IR} numBullets must be a factor of 360 for perfect circles. Received: {numBullets}")
-
         self.Arc(time, comp, bullet,
-            numBullets=numBullets, spacing=spacing, centerAt=centerAt, _radialBypass=True)
+            numBullets=numBullets, angle=360, centerAt=centerAt, _radialBypass=True)
 
         return self._component
 
