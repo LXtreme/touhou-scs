@@ -95,21 +95,14 @@ class GuiderCircle:
             self.groups = [0] * self.PRECISION
 
     def angle_to_groups(self, startAngle: float, endAngle: float, numPoints: int, closed_circle: bool = False):
-        """Convert angles to guidercircle groups, snapping to grid.
+        """
+        Convert angles to guidercircle groups, snapping to grid.
 
         Lazily allocates pointers from the pointer pool if not already allocated.
         Returns list of pointer groups corresponding to the requested angles.
-
-        Args:
-            startAngle: Starting angle in degrees
-            endAngle: Ending angle in degrees
-            numPoints: Number of points to distribute
-            closed_circle: If True, distributes points evenly without including endAngle
-                          (for radial patterns). If False, includes both start and end
-                          (for arc patterns).
         """
         if numPoints < 2:
-            raise ValueError("GuiderCircle.angle_to_groups: numPoints must be at least 2")
+            raise ValueError("GuiderCircle.angle_to_indices: numPoints must be at least 2")
 
         points_per_degree = self.PRECISION / 360
         arc_length = endAngle - startAngle

@@ -713,38 +713,6 @@ class Multitarget:
 #
 # ===========================================================
 
-class _PointerMgr:
-    """Used for Pointer internal management."""
-    setup_pointercircle: Component | None = None
-    align_north: Component | None = None
-    follow_comps: dict[int, Component] = {}
-
-    @classmethod
-    def get_setup_comp(cls) -> Component:
-        if cls.setup_pointercircle is None:
-            cls.setup_pointercircle = Component("Setup PointerCircle", unknown_g(), 7)
-            with cls.setup_pointercircle.temp_context(target=enum.EMPTY_BULLET):
-                (cls.setup_pointercircle
-                    .assert_spawn_order(False)
-                    .GotoGroup(0, enum.EMPTY_TARGET_GROUP))
-
-        return cls.setup_pointercircle
-
-    @classmethod
-    def get_follow_comp(cls, duration: int):
-        if duration in cls.follow_comps:
-            return cls.follow_comps[duration]
-
-        follow_comp = Component(f"[{duration}s] Follow PointerCircle", unknown_g(), 5)
-        with follow_comp.temp_context(target=enum.EMPTY_BULLET):
-            (follow_comp
-                .assert_spawn_order(False)
-                .Follow(0, enum.EMPTY_TARGET_GROUP, t=duration))
-
-        cls.follow_comps[duration] = follow_comp
-        return follow_comp
-
-
 class Pointer:
     def __init__(self, component: Component):
         self._component = component
@@ -757,26 +725,7 @@ class Pointer:
             raise RuntimeError(f"Component '{self._component.name}' has no active pointer circle")
         return self._component.current_pc.center
 
-    def SetPointerCircle(self, time: float, *,
-        location: int, duration: int = 0, align_north: bool = True):
-        """
-        Create a temporary Pointer-based GuiderCircle.
-
-        Duration: PointerCircle groups follow the center for 'duration' seconds.
-        """
-        validate_params(non_negative=duration, targets=location)
-
-        if self._component.requireSpawnOrder is False:
-            raise RuntimeError("Patterns.SetPointerCircle: Must be trigged in spawn order")
-        if self._component.current_pc is not None:
-            print("Patterns.SetPointerCircle: Overwriting existing GuiderCircle")
-            self.CleanPointerCircle()
-
-        pc = lib.GuiderCircle(center=lib.pointer.next()[0], point=0)
-
-        self._component.current_pc = pc
-
-        self._params = (time, location, duration, align_north)
+    def SetPointerCircle(self):
         return self._component
 
     def CleanPointerCircle(self):
@@ -784,75 +733,6 @@ class Pointer:
         if self._component.current_pc is None:
             raise RuntimeError("Patterns.CleanPointerCircle: No active GuiderCircle to clean")
 
-        time, location, duration, align_north = self._params
-        gc = lib.circle1
-
-        # Move original guidercircle into position
-        with self._component.temp_context(target=gc.all):
-            self._component.GotoGroup(time - enum.TICK*2, location)
-            if align_north:
-                self._component.PointToGroup(time - enum.TICK*2, enum.NORTH_GROUP)
-        
-        groups = [(i, g) for i, g in enumerate(self._component.current_pc.groups) if g != 0]
-        
-        remaining = len(groups)
-        iter = 0
-
-        def remap_goto(remap_pairs: dict[int, int], remap: util.Remap):
-            nonlocal iter
-            nonlocal groups
-            angle, pointer = groups[iter]
-            for source, target in remap_pairs.items():
-                if source == enum.EMPTY_BULLET:
-                    remap.pair(target, pointer)
-                elif source == enum.EMPTY_TARGET_GROUP:
-                    remap.pair(target, gc.groups[angle])
-                else:
-                    remap.pair(target, enum.EMPTY_MULTITARGET)
-            iter += 1
-
-        while remaining > 0:
-            batch_size = 64 if remaining > 127 else remaining
-
-            Multitarget.spawn_with_remap(self._component, time,
-                batch_size, _PointerMgr.get_setup_comp(), remap_goto)
-            remaining -= batch_size
-
-        pointer_center = self._component.current_pc.center
-        with self._component.temp_context(target=pointer_center):
-            self._component.GotoGroup(time, location)
-
-        if duration == 0:
-            self._params = tuple()
-            self._component.current_pc = None
-            return self._component
-
-        follow_comp = _PointerMgr.get_follow_comp(duration)
-
-        remaining = len(groups)
-        iter = 0
-
-        def remap_follow(remap_pairs: dict[int, int], remap: util.Remap):
-            nonlocal iter
-            nonlocal groups
-            _, pointer = groups[iter]
-            for source, target in remap_pairs.items():
-                if source == enum.EMPTY_BULLET:
-                    remap.pair(target, pointer)
-                elif source == enum.EMPTY_TARGET_GROUP:
-                    remap.pair(target, pointer_center)
-                else:
-                    remap.pair(target, enum.EMPTY_MULTITARGET)
-            iter += 1
-
-        while remaining > 0:
-            batch_size = 64 if remaining > 127 else remaining
-
-            Multitarget.spawn_with_remap(self._component, time,
-                batch_size, follow_comp, remap_follow)
-            remaining -= batch_size
-
-        self._params = tuple()
         self._component.current_pc = None
         return self._component
 
