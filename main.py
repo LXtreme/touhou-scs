@@ -66,7 +66,12 @@ test_enemy = (Component("TestEnemy", unknown_g(), 5)
     .set_context(target=test_enemy_g)
         .GotoGroup(0, middle_test)
     .clear_context()
-    .pointer.SetPointerCircle(0.5, location=test_enemy_g)
+    .pointer.SetPointerCircle(0.5, location=test_enemy_g, duration=6)
+)
+(test_enemy
+    .set_context(target=test_enemy.pointer.center)
+        .MoveBy(0.6, dx=-200, dy=0, t=5)
+    .clear_context()
     # Test 1: Basic radial with 5 bullets at 0°
     .instant.Radial(1.0, test_bullet, lib.bullet1, numBullets=5, centerAt=0)
     # Test 2: Same radial pattern (tests pointer reuse)

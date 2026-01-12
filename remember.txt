@@ -40,15 +40,9 @@ Midboss: none
 Endboss: ??? (formerly called Nameless Entity)
 
 TODO:
+- PointerCircle: Add 'follow rotation' alongside 'follow position'
 
 - Minor Optimization: Cache 'enforce_solid_groups' if used multiple times for the same groups
-
-- (consider) Refactor Multitarget to instead of requiring a callback function, require an int dict with the values being functions that return ints. This way instead of having to write pattern matching args, the dict can be the pattern matching.
-Example:
-{
-  "pattern1": function that returns int (group to remap to),
-  ...
-}
 
 - Add basic Bombing (keybind + texture)
 
@@ -61,8 +55,6 @@ Example:
 
 - Stacked ring pattern: have multiple arcs/radials spawn at the same time, with different speeds (like instant.Line but a circular formation of them).
 
-- Arc/Radial use gc center as emitter instead of an emitter param. change this?
-
 - Find out if its possible to have the entire enemy attack comp use placeholder emitters
 (current verdict: not possible cuz spawn limit)
 
@@ -70,25 +62,18 @@ Example:
 
 - Minor Optimization: Use Keyframe Anim's time-mod or scale-mod to possibly re-use keyframe components. This will depend on t/hold timing or scaling ratios.
 
-- Investigate spread_triggers: might cause spawn_order issues since GD rounds X-pos to 6 significant digits
-
 TODO SYSTEMS:
 
-
-
-Health system (enemy & player)
-Enemies
 All UI (health, bombs, score)
 Title screen
 Backgrounds
 3 Character movement profiles --> has been set, not finalized
 Keybind editor
 Bullet types (only 4 out of 8)
-Lazers
-Main Bullet SFX
+Lasers
+Main Bullet SFX (1 made)
 Player Shot types
 Item Pickups
-
 
 
 GROUP/OBJ BUDGET:
@@ -111,7 +96,6 @@ UI: 3k - 8k
 Visual effects: 5k - 10k 
 Total projected: 52.5k - 113k objects 
 Remaining budget: 137k - 197k objects
-
 
 
 MAKE BULLETS BOUNCE (off walls and such):

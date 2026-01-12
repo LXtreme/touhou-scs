@@ -711,6 +711,40 @@ class Multitarget:
 #
 # ===========================================================
 
+# Threshold for using multitarget optimization in CleanPointerCircle
+# Batches smaller than this are processed manually to avoid edge case bugs
+_MULTITARGET_THRESHOLD = 8
+
+class _PointerCleanup:
+    follow_comps: dict[float, Component] = {}
+    _goto_comp_storage: Component | None = None
+    
+    @classmethod
+    def get_goto_comp(cls) -> Component:
+        if cls._goto_comp_storage is None:
+            cls._goto_comp_storage = (Component("PointerCleanup_Goto", unknown_g(), 5)
+                .assert_spawn_order(False)
+                .set_context(target=enum.EMPTY_BULLET)
+                    .GotoGroup(0, enum.EMPTY_TARGET_GROUP, t=0)
+            )
+        return cls._goto_comp_storage
+    
+    @classmethod
+    def get_follow_comp(cls, duration: float) -> Component:
+        for c in cls.follow_comps.keys():
+            if abs(c - duration) < 0.09:
+                duration = c
+                break
+        
+        if duration not in cls.follow_comps:
+            comp = (Component(f"PointerCleanup_Follow_{duration}", unknown_g(), 5)
+                .assert_spawn_order(False)
+                .set_context(target=enum.EMPTY_BULLET)
+                    .Follow(0, enum.EMPTY_EMITTER, t=duration)
+            )
+            cls.follow_comps[duration] = comp
+        return cls.follow_comps[duration]
+
 class Pointer:
     def __init__(self, component: Component):
         self._component = component
@@ -722,10 +756,18 @@ class Pointer:
         if self._component.current_pc is None:
             raise RuntimeError(f"Component '{self._component.name}' has no active pointer circle")
         return self._component.current_pc.center
+    
+    def point(self) -> int:
+        """First pointer of the active PointerCircle."""
+        if self._component.current_pc is None:
+            raise RuntimeError(f"Component '{self._component.name}' has no active pointer circle")
+        return self._component.current_pc.point
 
     def SetPointerCircle(self, time: float, *, location: int, duration: float = 0, set_north: bool = True):
         if self._component.current_pc is not None:
             raise RuntimeError("Pointer.SetPointerCircle: A PointerCircle is already active")
+        if duration < 0:
+            raise ValueError("Pointer.SetPointerCircle: duration cannot be negative")
         
         pc = lib.GuiderCircle(point=0, center=0)
         self._component.current_pc = pc
@@ -733,10 +775,10 @@ class Pointer:
         
         with self._component.temp_context(target=lib.circle1.all):
             self._component.GotoGroup(time - enum.TICK*2, location)
-            self._component.PointToGroup(time - enum.TICK, enum.NORTH_GROUP)
+            if set_north:
+                self._component.PointToGroup(time - enum.TICK, enum.NORTH_GROUP)
         with self._component.temp_context(target=pc.center):
             self._component.GotoGroup(time, lib.circle1.center)
-        
         
         return self._component
 
@@ -749,15 +791,69 @@ class Pointer:
         pc = self._component.current_pc
         c1 = lib.circle1
         
-        print((pc.groups))
-        print(pc.center)
-        for i, g in enumerate(pc.groups):
-            if g == -1: continue
-            # print(f'paired {i} to group {g}')
-            with self._component.temp_context(target=g):
-                self._component.GotoGroup(time - enum.TICK, c1.groups[i])
-                if duration > 0:
-                    self._component.Follow(time, pc.center)
+        used_pointers = [(g, c1.groups[i]) for i, g in enumerate(pc.groups) if g != -1]
+        
+        # === PHASE 1: Move pointers to circle1 positions (GotoGroup) ===
+        pair_iter = iter(used_pointers)
+        goto_comp = _PointerCleanup.get_goto_comp()
+        
+        def remap_goto(remap_pairs: dict[int, int], remap: util.Remap):
+            pc_pointer, c1_pointer = next(pair_iter)
+            for source, target in remap_pairs.items():
+                if source == enum.EMPTY_BULLET:
+                    remap.pair(target, pc_pointer)
+                elif source == enum.EMPTY_TARGET_GROUP:
+                    remap.pair(target, c1_pointer)
+                else:
+                    remap.pair(target, enum.EMPTY_MULTITARGET)
+        
+        remaining = len(used_pointers)
+        while remaining > 0:
+            batch_size = 64 if remaining > 127 else remaining
+            
+            # Skip small batches - process manually instead
+            if batch_size < _MULTITARGET_THRESHOLD:
+                for _ in range(batch_size):
+                    pc_pointer, c1_pointer = next(pair_iter)
+                    with self._component.temp_context(target=pc_pointer):
+                        self._component.GotoGroup(time - enum.TICK, c1_pointer)
+            else:
+                Multitarget.spawn_with_remap(self._component, time - enum.TICK, batch_size, goto_comp, remap_goto)
+            
+            remaining -= batch_size
+        
+        # === PHASE 2: Add follow behavior ===
+        if duration < 0:
+            self._component.current_pc = None
+            return self._component
+        
+        pair_iter = iter(used_pointers)
+        follow_comp = _PointerCleanup.get_follow_comp(duration)
+        
+        def remap_follow(remap_pairs: dict[int, int], remap: util.Remap):
+            pc_pointer, _ = next(pair_iter)
+            for source, target in remap_pairs.items():
+                if source == enum.EMPTY_BULLET:
+                    remap.pair(target, pc_pointer)
+                elif source == enum.EMPTY_EMITTER:
+                    remap.pair(target, pc.center)
+                else:
+                    remap.pair(target, enum.EMPTY_MULTITARGET)
+        
+        remaining = len(used_pointers)
+        while remaining > 0:
+            batch_size = 64 if remaining > 127 else remaining
+            
+            # Skip small batches - process manually instead
+            if batch_size < _MULTITARGET_THRESHOLD:
+                for _ in range(batch_size):
+                    pc_pointer, _ = next(pair_iter)
+                    with self._component.temp_context(target=pc_pointer):
+                        self._component.Follow(time, pc.center, t=duration)
+            else:
+                Multitarget.spawn_with_remap(self._component, time, batch_size, follow_comp, remap_follow)
+            
+            remaining -= batch_size
         
         self._component.current_pc = None
         return self._component
