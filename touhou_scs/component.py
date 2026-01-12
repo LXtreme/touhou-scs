@@ -123,13 +123,11 @@ def validate_params(*,
     # Check counter bounds AFTER caching (counter is dynamic, can't be cached)
     if targets is not None:
         c = util.unknown_g.counter
-        if isinstance(targets, int):
-            if targets > c:
-                raise ValueError(f"Target Group '{targets}' is out of valid range (1-{c}).")
-        else:
-            for g in targets:
-                if g > c:
-                    raise ValueError(f"Target Group '{g}' is out of valid range (1-{c}).")
+        targets_list = [targets] if isinstance(targets, int) else targets
+        
+        for g in targets_list:
+            if g > c:
+                raise ValueError(f"Target Group '{g}' is out of valid range (1-{c}).")
 
 def enforce_solid_groups(*groups: int):
     for g in groups:
@@ -716,7 +714,7 @@ class Multitarget:
 class Pointer:
     def __init__(self, component: Component):
         self._component = component
-        self._params: Any = tuple()
+        self._params: Any = ()
 
     @property
     def center(self) -> int:
@@ -725,14 +723,42 @@ class Pointer:
             raise RuntimeError(f"Component '{self._component.name}' has no active pointer circle")
         return self._component.current_pc.center
 
-    def SetPointerCircle(self):
+    def SetPointerCircle(self, time: float, *, location: int, duration: float = 0, set_north: bool = True):
+        if self._component.current_pc is not None:
+            raise RuntimeError("Pointer.SetPointerCircle: A PointerCircle is already active")
+        
+        pc = lib.GuiderCircle(point=0, center=0)
+        self._component.current_pc = pc
+        self._params = (time, duration)
+        
+        with self._component.temp_context(target=lib.circle1.all):
+            self._component.GotoGroup(time - enum.TICK*2, location)
+            self._component.PointToGroup(time - enum.TICK, enum.NORTH_GROUP)
+        with self._component.temp_context(target=pc.center):
+            self._component.GotoGroup(time, lib.circle1.center)
+        
+        
         return self._component
 
     def CleanPointerCircle(self):
         """Remove active Pointer-based GuiderCircle"""
         if self._component.current_pc is None:
-            raise RuntimeError("Patterns.CleanPointerCircle: No active GuiderCircle to clean")
-
+            raise RuntimeError("Pointer.CleanPointerCircle: No active PointerCircle to clean")
+        
+        time, duration = self._params
+        pc = self._component.current_pc
+        c1 = lib.circle1
+        
+        print((pc.groups))
+        print(pc.center)
+        for i, g in enumerate(pc.groups):
+            if g == -1: continue
+            # print(f'paired {i} to group {g}')
+            with self._component.temp_context(target=g):
+                self._component.GotoGroup(time - enum.TICK, c1.groups[i])
+                if duration > 0:
+                    self._component.Follow(time, pc.center)
+        
         self._component.current_pc = None
         return self._component
 
@@ -770,13 +796,12 @@ class InstantPatterns:
         startAngle = centerAt - angle / 2
         endAngle = centerAt + angle / 2
         groups = pc.angle_to_groups(startAngle, endAngle, numBullets, _radialBypass)
-        iter = 0
+        iter_groups = iter(groups)
 
         def remap_arc(remap_pairs: dict[int, int], remap: util.Remap):
-            nonlocal iter
-            nonlocal groups
+            nonlocal iter_groups
             bullet_group, bullet_col = bullet.next()
-            pointer = groups[iter]
+            pointer = next(iter_groups)
             for source, target in remap_pairs.items():
                 if source == enum.EMPTY_BULLET:
                     remap.pair(target, bullet_group)
@@ -788,7 +813,6 @@ class InstantPatterns:
                     remap.pair(target, pc.center)
                 else:
                     remap.pair(target, enum.EMPTY_MULTITARGET)
-            iter += 1
 
         Multitarget.spawn_with_remap(self._component, time, numBullets, comp, remap_arc)
 
@@ -804,12 +828,11 @@ class InstantPatterns:
         Optional: spacing or numBullets, centerAt
         """
         IR = "Instant Radial:"
-        util.enforce_component_targets(IR,comp,
+        util.enforce_component_targets(IR, comp,
             requires={enum.EMPTY_BULLET, enum.EMPTY_TARGET_GROUP },
             excludes={enum.EMPTY_MULTITARGET}
         )
 
-        # Validate centerAt
         if not (0 <= centerAt < 360):
             raise ValueError(f"{IR} centerAt must be between 0 (inclusive) and 360 (exclusive). Got: {centerAt}")
 

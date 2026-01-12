@@ -86,13 +86,14 @@ class GuiderCircle:
 
     def __init__(self, center: int, point: int, all_group: int = 0):
         self.all = all_group
-        self.center = center
+        self.center = center if center != 0 else pointer.next()[0]
         self.point = point  # direction that the guidercircle points
 
-        if point > 0: # Circle1
+        if point != 0: # Circle1
             self.groups = [point + i for i in range(self.PRECISION)]
         else:
-            self.groups = [0] * self.PRECISION
+            self.groups = [-1] * self.PRECISION
+            self.groups[0] = pointer.next()[0]  # Allocate first pointer
 
     def angle_to_groups(self, startAngle: float, endAngle: float, numPoints: int, closed_circle: bool = False):
         """
@@ -120,8 +121,8 @@ class GuiderCircle:
         for orig_angle in original_angles:
             index = round(orig_angle * points_per_degree) % self.PRECISION
 
-            # Lazy allocation: if groups[index] is 0, allocate a new pointer
-            if self.groups[index] == 0:
+            # Lazy allocation: if groups[index] is -1, allocate a new pointer
+            if self.groups[index] == -1:
                 self.groups[index] = pointer.next()[0]
 
             groups.append(self.groups[index])
@@ -230,9 +231,7 @@ class EnemyPool:
         stage.Pickup(time - enum.TICK*2, item_id=enemy_group, count=hp, override=True)
 
 
-
-#
-# less annoying way instead of making 'despawner' have spawn order
+# less annoying way instead of making 'despawner' have spawn order (uses spawn delay instead)
 toggler = (Component("Toggler", unknown_g(), 7)
     .assert_spawn_order(False)
     .set_context(target=enum.EMPTY_TARGET_GROUP)

@@ -58,9 +58,8 @@ test_bullet = (Component("TestBullet", unknown_g(), 5)
 
 # ===========================================================================
 # TEST PATTERNS
-# ===========================================================================
+# =========================================================================
 
-# Test enemy to verify 1080 precision and lazy pointer allocation
 test_enemy_g = enemy1.next()
 test_enemy = (Component("TestEnemy", unknown_g(), 5)
     .assert_spawn_order(True)
@@ -68,10 +67,34 @@ test_enemy = (Component("TestEnemy", unknown_g(), 5)
         .GotoGroup(0, middle_test)
     .clear_context()
     .pointer.SetPointerCircle(0.5, location=test_enemy_g)
-    # .instant.Arc(1.0, test_bullet, lib.bullet1, angle=50, numBullets=5, centerAt=0)
-    # .instant.Arc(2.0, test_bullet, lib.bullet1, angle=50, numBullets=5, centerAt=0)
+    # Test 1: Basic radial with 5 bullets at 0°
     .instant.Radial(1.0, test_bullet, lib.bullet1, numBullets=5, centerAt=0)
-    .instant.Radial(2.0, test_bullet, lib.bullet1, numBullets=5, centerAt=0)
+    # Test 2: Same radial pattern (tests pointer reuse)
+    .instant.Radial(1.5, test_bullet, lib.bullet1, numBullets=5, centerAt=0)
+    # Test 3: Different centerAt (90°)
+    .instant.Radial(2.0, test_bullet, lib.bullet1, numBullets=5, centerAt=90)
+    # Test 4: Different numBullets (8 bullets)
+    .instant.Radial(2.5, test_bullet, lib.bullet1, numBullets=8, centerAt=0)
+    # Test 5: High bullet count (16 bullets at 180°)
+    .instant.Radial(3.0, test_bullet, lib.bullet1, numBullets=16, centerAt=180)
+    # Test 6: Low bullet count (3 bullets at 270°)
+    .instant.Radial(3.5, test_bullet, lib.bullet1, numBullets=3, centerAt=270)
+    # Test 7: Arc pattern - 90° arc with 7 bullets at 45°
+    .instant.Arc(4.0, test_bullet, lib.bullet1, angle=90, numBullets=7, centerAt=45)
+    # Test 8: Arc pattern - 180° arc with 10 bullets at 180°
+    .instant.Arc(4.5, test_bullet, lib.bullet1, angle=180, numBullets=10, centerAt=180)
+    # Test 9: Narrow arc - 30° with 5 bullets at 0°
+    .instant.Arc(5.0, test_bullet, lib.bullet1, angle=30, numBullets=5, centerAt=0)
+    # Test 10: Wide arc - 270° with 15 bullets at 270°
+    .instant.Arc(5.5, test_bullet, lib.bullet1, angle=270, numBullets=15, centerAt=270)
+    # Test 11: Two bullets at odd angle (33.333°)
+    .instant.Radial(6.0, test_bullet, lib.bullet1, numBullets=2, centerAt=33.333)
+    # Test 12: Prime number bullets (13) at odd angle (127.5°)
+    .instant.Radial(6.5, test_bullet, lib.bullet1, numBullets=13, centerAt=127.5)
+    # Test 13: Large radial (24 bullets at 0°) - tests many pointer allocations
+    .instant.Radial(7.0, test_bullet, lib.bullet1, numBullets=24, centerAt=0)
+    # Test 14: Full arc (360° with 12 bullets at 0°) - should behave like radial
+    .instant.Arc(7.5, test_bullet, lib.bullet1, angle=360, numBullets=12, centerAt=0)
     .pointer.CleanPointerCircle()
 )
 
