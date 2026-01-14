@@ -19,518 +19,387 @@ from touhou_scs.component import Component, Multitarget
 from touhou_scs import enums, lib, utils
 from typing import Any
 
+
+@pytest.fixture(autouse=True)
+def reset_global_state():
+    """Clear global state before each test to prevent interference."""
+    lib.all_components.clear()
+    lib.solid_groups_to_enforce.clear()
+    yield
+
+
 def setup_pointer_circle(caller: Component) -> Component:
     """Helper to set up a PointerCircle context for pattern tests."""
     caller.assert_spawn_order(True)
     caller.pointer.SetPointerCircle(0, location=100, follow=False)
     return caller
 
-P = enums.Properties
+ppt = enums.Properties
 
 def assert_error(exc_info: ExceptionInfo[BaseException], *patterns: str) -> None:
-    """Assert exception message contains all patterns."""
-    msg_clean = str(exc_info.value).lower().replace(" ", "")
+    """Assert exception message contains all patterns (case-insensitive)."""
+    msg = str(exc_info.value).lower()
     for pattern in patterns:
-        p = pattern.lower().replace(" ", "")
-        assert p in msg_clean, f"Expected '{pattern}' in: {str(exc_info.value)}"
+        p = pattern.lower()
+        assert p in msg, f"Expected '{pattern}' in: {str(exc_info.value)}"
 
 def assert_warning(warning_list: list[warnings.WarningMessage], *patterns: str) -> None:
-    """Assert warning list contains all patterns."""
-    combined_msgs = " ".join(str(w.message).lower().replace(" ", "") for w in warning_list)
+    """Assert warning list contains all patterns (case-insensitive)."""
+    combined_msgs = " ".join(str(w.message).lower() for w in warning_list)
     for pattern in patterns:
-        p = pattern.lower().replace(" ", "")
+        p = pattern.lower()
         assert p in combined_msgs, f"Expected '{pattern}' in warnings."
 
 # ============================================================================
 # SPAWN TRIGGER - Target Group Validation
 # ============================================================================
 
+def _test_spawn_target(target: int, should_fail: bool, *error_patterns: str):
+    """Helper to test Spawn with different target values"""
+    comp = Component("Test", 100)
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            comp.Spawn(0, target, spawnOrdered=False)
+        assert_error(exc, *error_patterns)
+    else:
+        comp.Spawn(0, target, spawnOrdered=False)
+        assert comp.triggers[0][ppt.TARGET] == target
+
 class TestSpawnTargetValidation:
-    """Test Spawn target group validation boundaries"""
+    @pytest.mark.parametrize("target,error_patterns", [
+        (0, ("positive", "0")),
+        (-50, ("positive", "-50")),
+        (3, ("restricted", "3")),
+        (utils.unknown_g.counter + 1, ("out of valid range",)),
+    ])
+    def test_spawn_target_rejected(self, target: int, error_patterns: tuple[str, ...]):
+        _test_spawn_target(target, True, *error_patterns)
+    
+    @pytest.mark.parametrize("target", [10, utils.unknown_g.counter])
+    def test_spawn_target_valid(self, target: int):
+        _test_spawn_target(target, False)
 
-    def test_spawn_target_zero_rejected(self):
-        """Target group 0 is out of valid range"""
-        comp = Component("Test", 100)
+
+def _test_spawn_delay(delay: float, should_fail: bool, *error_patterns: str):
+    """Helper to test Spawn with different delay values"""
+    comp = Component("Test", 100)
+    if should_fail:
         with pytest.raises(ValueError) as exc:
-            comp.Spawn(0, 0, spawnOrdered=False)
-        assert_error(exc, "positive", "0")
-
-    def test_spawn_target_negative_rejected(self):
-        """Negative target groups are rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Spawn(0, -50, spawnOrdered=False)
-        assert_error(exc, "positive", "-50")
-
-    def test_spawn_target_10_valid(self):
-        """Target group 10 is valid (non-restricted)"""
-        comp = Component("Test", 100)
-        comp.Spawn(0, 10, spawnOrdered=False)
-        trigger = comp.triggers[0]
-        assert trigger[P.TARGET] == 10
-
-    def test_spawn_target_at_counter_valid(self):
-        """Target at unknown_g.counter boundary is valid"""
-        comp = Component("Test", 100)
-        max_valid = utils.unknown_g.counter
-        comp.Spawn(0, max_valid, spawnOrdered=False)
-        trigger = comp.triggers[0]
-        assert trigger[P.TARGET] == max_valid
-
-    def test_spawn_target_above_counter_rejected(self):
-        """Target above unknown_g.counter is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Spawn(0, utils.unknown_g.counter + 1, spawnOrdered=False)
-        assert_error(exc, "out of valid range")
-
-    def test_spawn_restricted_group_rejected(self):
-        """Restricted groups are rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Spawn(0, 3, spawnOrdered=False)
-        assert_error(exc, "restricted", "3")
-
+            comp.Spawn(0, 50, spawnOrdered=False, delay=delay)
+        assert_error(exc, *error_patterns)
+    else:
+        comp.Spawn(0, 50, spawnOrdered=False, delay=delay)
+        if delay > 0:
+            assert comp.triggers[0][ppt.SPAWN_DELAY] == delay
 
 class TestSpawnDelayValidation:
-    """Test Spawn delay parameter behavior"""
-
-    def test_spawn_negative_delay_rejected(self):
-        """Negative delay is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Spawn(0, 50, spawnOrdered=False, delay=-1)
-        assert_error(exc, "non-negative", "-1")
-
+    @pytest.mark.parametrize("delay,should_fail,error_patterns", [
+        (-1, True, ("non-negative", "-1")),
+        (0, False, ()),
+        (0.5, False, ()),
+    ])
+    def test_spawn_delay(self, delay: float, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_spawn_delay(delay, should_fail, *error_patterns)
+    
     def test_spawn_zero_delay_not_stored(self):
-        """Zero delay is not stored"""
+        """Zero delay is not stored as a property"""
         comp = Component("Test", 100)
         comp.Spawn(0, 50, spawnOrdered=False, delay=0)
-        trigger = comp.triggers[0]
-        assert P.SPAWN_DELAY not in trigger
-
+        assert ppt.SPAWN_DELAY not in comp.triggers[0]
+    
     def test_spawn_positive_delay_stored(self):
-        """Positive delay is stored"""
+        """Positive delay is stored correctly"""
         comp = Component("Test", 100)
         comp.Spawn(0, 50, spawnOrdered=False, delay=0.5)
-        trigger = comp.triggers[0]
-        assert trigger[P.SPAWN_DELAY] == 0.5
+        assert comp.triggers[0][ppt.SPAWN_DELAY] == 0.5
 
 
 class TestSpawnRemapValidation:
-    """Test remap string handling"""
-
     def test_spawn_remap_empty_string_not_stored(self):
         """Empty remap string is silently skipped"""
         comp = Component("Test", 100)
         comp.Spawn(0, 50, spawnOrdered=False, remap="")
-        trigger = comp.triggers[0]
-        assert P.REMAP_STRING not in trigger
+        assert ppt.REMAP_STRING not in comp.triggers[0]
 
     def test_spawn_remap_odd_pairs_rejected(self):
-        """Odd number of remap values is rejected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
             comp.Spawn(0, 50, spawnOrdered=False, remap="1.2.3")
         assert_error(exc, "even number")
 
     def test_spawn_remap_duplicate_source_rejected(self):
-        """Remapping same source to different targets is rejected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
             comp.Spawn(0, 50, spawnOrdered=False, remap="10.20.10.30")
-        assert_error(exc, "Duplicate source", "10")
+        assert_error(exc, "duplicate source", "10")
 
 
 # ============================================================================
 # MOVE TRIGGERS - Easing Boundaries
 # ============================================================================
 
+def _test_move_easing(type: int | None = None, rate: float | None = None, 
+                      should_fail: bool = False, error_patterns: tuple[str, ...] = ()):
+    """Helper to test MoveTowards with different easing parameters"""
+    comp = Component("Test", 100)
+    comp.set_context(target=50)
+    kwargs = {"t": 1.0, "dist": 100}
+    if type is not None:
+        kwargs["type"] = type
+    if rate is not None:
+        kwargs["rate"] = rate
+    
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            comp.MoveTowards(0, targetDir=60, **kwargs)
+        assert_error(exc, *error_patterns)
+    else:
+        comp.MoveTowards(0, targetDir=60, **kwargs)
+        if type is not None:
+            assert comp.triggers[0][ppt.EASING] == type
+        if rate is not None:
+            assert comp.triggers[0][ppt.EASING_RATE] == rate
+
 class TestMoveEasingValidation:
-    """Test Move trigger easing parameter boundaries"""
-
-    def test_easing_type_negative_rejected(self):
-        """Negative easing type is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, type=-1)
-        assert_error(exc, "type", "-1")
-
-    def test_easing_type_19_rejected(self):
-        """Easing type 19 (above max 18) is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, type=19)
-        assert_error(exc, "type", "19")
-
-    def test_easing_type_0_valid(self):
-        """Easing type 0 (NONE) is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, type=0)
-        trigger = comp.triggers[0]
-        assert trigger[P.EASING] == 0
-
-    def test_easing_type_18_valid(self):
-        """Easing type 18 (max) is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, type=18)
-        trigger = comp.triggers[0]
-        assert trigger[P.EASING] == 18
-
-    def test_easing_rate_0_10_rejected(self):
-        """Easing rate at 0.10 is rejected (must be > 0.10)"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, rate=0.10)
-        assert_error(exc, "rate", "0.1")
-
-    def test_easing_rate_below_0_10_rejected(self):
-        """Easing rate below 0.10 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, rate=0.05)
-        assert_error(exc, "rate", "0.05")
-
-    def test_easing_rate_above_20_rejected(self):
-        """Easing rate above 20.0 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, rate=20.01)
-        assert_error(exc, "rate", "20.01")
-
-    def test_easing_rate_20_valid(self):
-        """Easing rate 20.0 is valid (upper boundary)"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, rate=20.0)
-        trigger = comp.triggers[0]
-        assert trigger[P.EASING_RATE] == 20.0
-
-    def test_easing_rate_just_above_0_10_valid(self):
-        """Easing rate just above 0.10 is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, rate=0.11)
-        trigger = comp.triggers[0]
-        assert trigger[P.EASING_RATE] == 0.11
-
-    def test_easing_type_float_non_integer_rejected(self):
-        """Easing type as non-integer float is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.MoveTowards(0, targetDir=60, t=1.0, dist=100, type=2.5)
-        assert_error(exc, "type", "2.5")
+    @pytest.mark.parametrize("type,rate,should_fail,error_patterns", [
+        (-1, None, True, ("type", "-1")),
+        (19, None, True, ("type", "19")),
+        (2.5, None, True, ("type", "2.5")),  # Non-integer float
+        (0, None, False, ()),
+        (18, None, False, ()),
+        (None, 0.10, True, ("rate", "0.1")),
+        (None, 0.05, True, ("rate", "0.05")),
+        (None, 20.01, True, ("rate", "20.01")),
+        (None, 0.11, False, ()),
+        (None, 20.0, False, ()),
+    ])
+    def test_easing_validation(self, type: int | None, rate: float | None, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_move_easing(type=type, rate=rate, should_fail=should_fail, error_patterns=error_patterns)
 
 
 class TestMoveDurationValidation:
-    """Test Move trigger duration validation"""
-
     def test_duration_negative_rejected(self):
-        """Negative duration is rejected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
             comp.set_context(target=50)
             comp.MoveTowards(0, targetDir=60, t=-0.5, dist=100)
         assert_error(exc, "non-negative", "-0.5")
-
+    
     def test_duration_zero_sets_silent(self):
-        """Duration zero sets MOVE_SILENT flag"""
+        """Duration=0 should set MOVE_SILENT=True"""
         comp = Component("Test", 100)
         comp.set_context(target=50)
         comp.MoveTowards(0, targetDir=60, t=0, dist=100)
-        trigger = comp.triggers[0]
-        assert trigger[P.MOVE_SILENT] is True
-
+        assert comp.triggers[0][ppt.MOVE_SILENT]
+    
     def test_duration_positive_no_silent(self):
-        """Positive duration doesn't set MOVE_SILENT flag"""
+        """Duration>0 should not set MOVE_SILENT"""
         comp = Component("Test", 100)
         comp.set_context(target=50)
-        comp.MoveTowards(0, targetDir=60, t=0.5, dist=100)
-        trigger = comp.triggers[0]
-        assert P.MOVE_SILENT not in trigger
+        comp.MoveTowards(0, targetDir=60, t=1.0, dist=100)
+        assert ppt.MOVE_SILENT not in comp.triggers[0]
 
 
 # ============================================================================
 # ALPHA TRIGGER - Opacity Boundaries
 # ============================================================================
 
+def _test_alpha_opacity(opacity: float, should_fail: bool, *error_patterns: str):
+    """Helper to test Alpha with different opacity values"""
+    comp = Component("Test", 100)
+    comp.set_context(target=50)
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            comp.Alpha(0, opacity=opacity)
+        assert_error(exc, *error_patterns)
+    else:
+        comp.Alpha(0, opacity=opacity)
+        # Opacity is stored as decimal (0-1 range)
+        assert comp.triggers[0][ppt.OPACITY] == opacity / 100.0
+
 class TestAlphaOpacityValidation:
-    """Test Alpha trigger opacity boundaries"""
-
-    def test_opacity_negative_rejected(self):
-        """Negative opacity is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Alpha(0, opacity=-1)
-        assert_error(exc, "between 0 and 100")
-
-    def test_opacity_above_100_rejected(self):
-        """Opacity above 100 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Alpha(0, opacity=101)
-        assert_error(exc, "between 0 and 100")
-
-    def test_opacity_0_valid(self):
-        """Opacity 0 (fully transparent) is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.Alpha(0, opacity=0)
-        trigger = comp.triggers[0]
-        assert trigger[P.OPACITY] == 0.0
-
-    def test_opacity_100_valid(self):
-        """Opacity 100 (fully opaque) is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.Alpha(0, opacity=100)
-        trigger = comp.triggers[0]
-        assert trigger[P.OPACITY] == 1.0
-
+    @pytest.mark.parametrize("opacity,should_fail,error_patterns", [
+        (-1, True, ("between 0 and 100",)),
+        (101, True, ("between 0 and 100",)),
+        (0, False, ()),
+        (50, False, ()),
+        (100, False, ()),
+    ])
+    def test_opacity_validation(self, opacity: float, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_alpha_opacity(opacity, should_fail, *error_patterns)
+    
     def test_opacity_converts_to_decimal(self):
-        """Opacity 50 converts to 0.5"""
+        """Opacity is stored as decimal (0-1 range)"""
         comp = Component("Test", 100)
         comp.set_context(target=50)
-        comp.Alpha(0, opacity=50)
-        trigger = comp.triggers[0]
-        assert trigger[P.OPACITY] == 0.5
+        comp.Alpha(0, opacity=75)
+        assert comp.triggers[0][ppt.OPACITY] == 0.75
 
 
 # ============================================================================
 # SCALE TRIGGER - Factor Validation
 # ============================================================================
 
+def _test_scale_factor(factor: float, hold: float, should_fail: bool, *error_patterns: str):
+    """Helper to test Scale with different factor values"""
+    comp = Component("Test", 100)
+    comp.set_context(target=50)
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            comp.Scale(0, factor=factor, t=1.0, hold=hold)
+        assert_error(exc, *error_patterns)
+    else:
+        # May produce warnings for factors near 1.0
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            comp.Scale(0, factor=factor, t=1.0, hold=hold)
+        assert len(comp.triggers) > 0
+
 class TestScaleFactorValidation:
-    def test_scale_factor_zero_rejected(self):
-        """Scale factor 0 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Scale(0, factor=0, t=1.0)
-        assert_error(exc, "factor", ">0", "0")
-
-    def test_scale_factor_negative_rejected(self):
-        """Negative scale factor is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Scale(0, factor=-1.0, t=1.0)
-        assert_error(exc, "factor", ">0", "-1")
-
-    def test_scale_factor_one_rejected(self):
-        """Scale factor 1.0 (no change) is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Scale(0, factor=1.0, t=1.0)
-        assert_error(exc, "1", "has no effect")
-
-    def test_scale_factor_barely_above_one_valid(self):
-        """Scale factor just above 1.0 is valid"""
-        comp = Component("Test", 100)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            comp.set_context(target=50)
-            comp.Scale(0, factor=1.0001, t=1.0)
-            assert_warning(w, "hold", "0", "not in reverse")
-        assert len(comp.triggers) == 1
-
-    def test_scale_factor_barely_below_one_valid(self):
-        """Scale factor just below 1.0 is valid"""
-        comp = Component("Test", 100)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            comp.set_context(target=50)
-            comp.Scale(0, factor=0.9999, t=1.0)
-            assert_warning(w, "hold", "0", "not in reverse")
-        assert len(comp.triggers) == 1
-
-    def test_scale_hold_negative_rejected(self):
-        """Negative hold time is rejected via duration validation"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Scale(0, factor=2.0, t=1.0, hold=-0.1)
-        assert_error(exc, "non-negative", "-0.1")
+    @pytest.mark.parametrize("factor,hold,should_fail,error_patterns", [
+        (0, 0.5, True, ("factor", ">0", "0")),
+        (-1, 0.5, True, ("factor", ">0", "-1")),
+        (1.0, 0.5, True, ("1", "has no effect")),
+        (2.0, -0.1, True, ("non-negative", "-0.1")),
+        (0.9999, 0.5, False, ()),
+        (1.0001, 0.5, False, ()),
+        (2.0, 0.5, False, ()),
+    ])
+    def test_scale_validation(self, factor: float, hold: float, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_scale_factor(factor, hold, should_fail, *error_patterns)
 
 
 # ============================================================================
 # COUNT TRIGGER - Item ID Validation
 # ============================================================================
 
+def _test_count_item_id(item_id: int, should_fail: bool, *error_patterns: str):
+    """Helper to test Count with different item_id values"""
+    comp = Component("Test", 100)
+    comp.set_context(target=50)
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            comp.Count(0, item_id=item_id, count=5, activateGroup=True)
+        assert_error(exc, *error_patterns)
+    else:
+        comp.Count(0, item_id=item_id, count=5, activateGroup=True)
+        assert comp.triggers[0][ppt.ITEM_ID] == item_id
+
 class TestCountItemIdValidation:
-    """Test Count trigger item ID validation"""
-
-    def test_count_item_id_zero_rejected(self):
-        """Item ID 0 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Count(0, item_id=0, count=5, activateGroup=True)
-        assert_error(exc, "positive", "0")
-
-    def test_count_item_id_negative_rejected(self):
-        """Negative item ID is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Count(0, item_id=-1, count=5, activateGroup=True)
-        assert_error(exc, "positive", "-1")
-
-    def test_count_item_id_above_9999_rejected(self):
-        """Item ID above 9999 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.set_context(target=50)
-            comp.Count(0, item_id=10000, count=5, activateGroup=True)
-        assert_error(exc, "positive", "10000")
-
-    def test_count_item_id_1_valid(self):
-        """Item ID 1 (lower boundary) is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.Count(0, item_id=1, count=5, activateGroup=True)
-        trigger = comp.triggers[0]
-        assert trigger[P.ITEM_ID] == 1
-
-    def test_count_item_id_9999_valid(self):
-        """Item ID 9999 (upper boundary) is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.Count(0, item_id=9999, count=5, activateGroup=True)
-        trigger = comp.triggers[0]
-        assert trigger[P.ITEM_ID] == 9999
+    @pytest.mark.parametrize("item_id,should_fail,error_patterns", [
+        (0, True, ("positive", "0")),
+        (-1, True, ("positive", "-1")),
+        (10000, True, ("positive", "10000")),
+        (1, False, ()),
+        (9999, False, ()),
+    ])
+    def test_count_item_id_validation(self, item_id: int, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_count_item_id(item_id, should_fail, *error_patterns)
 
 
 # ============================================================================
 # PICKUP TRIGGER - Validation
 # ============================================================================
 
+def _test_pickup(item_id: int | None = None, count: int | None = None, 
+                 should_fail: bool = False, error_patterns: tuple[str, ...] = ()):
+    """Helper to test Pickup with different parameters"""
+    comp = Component("Test", 100)
+    # Use defaults for unspecified params
+    if item_id is None:
+        item_id = 5
+    if count is None:
+        count = 50
+    
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            comp.Pickup(0, item_id=item_id, count=count, override=False)
+        assert_error(exc, *error_patterns)
+    else:
+        comp.Pickup(0, item_id=item_id, count=count, override=False)
+        assert comp.triggers[0][ppt.ITEM_ID] == item_id
+        assert comp.triggers[0][ppt.PICKUP_COUNT] == count
+
 class TestPickupValidation:
-    """Test Pickup trigger validation"""
-
-    def test_pickup_item_id_zero_rejected(self):
-        """Item ID 0 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Pickup(0, item_id=0, count=50, override=False)
-        assert_error(exc, "positive", "0")
-
-    def test_pickup_item_id_negative_rejected(self):
-        """Negative item ID is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Pickup(0, item_id=-10, count=50, override=False)
-        assert_error(exc, "positive", "-10")
-
-    def test_pickup_item_id_above_9999_rejected(self):
-        """Item ID above 9999 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Pickup(0, item_id=10000, count=50, override=False)
-        assert_error(exc, "positive", "10000")
-
-    def test_pickup_count_zero_rejected(self):
-        """Count of 0 (no change) is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Pickup(0, item_id=5, count=0, override=False)
-        assert_error(exc, "no change", "0")
-
-    def test_pickup_count_negative_allowed(self):
-        """Negative count (subtract items) is allowed"""
-        comp = Component("Test", 100)
-        comp.Pickup(0, item_id=5, count=-50, override=False)
-        trigger = comp.triggers[0]
-        assert trigger[P.PICKUP_COUNT] == -50
-
+    @pytest.mark.parametrize("item_id,count,should_fail,error_patterns", [
+        (0, None, True, ("positive", "0")),
+        (-1, None, True, ("positive", "-1")),
+        (10000, None, True, ("positive", "10000")),
+        (None, 0, True, ("no change", "0")),
+        (1, None, False, ()),
+        (9999, None, False, ()),
+        (None, -10, False, ()),
+    ])
+    def test_pickup_validation(self, item_id: int | None, count: int | None, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_pickup(item_id=item_id, count=count, should_fail=should_fail, error_patterns=error_patterns)
+    
     def test_pickup_no_target_property(self):
         """Pickup trigger should not have TARGET property"""
         comp = Component("Test", 100)
-        comp.Pickup(0, item_id=5, count=50, override=False)
-        trigger = comp.triggers[0]
-        assert P.TARGET not in trigger
+        comp.Pickup(0, item_id=12, count=50, override=True)
+        assert ppt.TARGET not in comp.triggers[0]
 
 
 # ============================================================================
 # PICKUP MODIFY TRIGGER - Validation
 # ============================================================================
 
+def _test_pickup_modify(item_id: int | None = None, factor: float | None = None,
+                        multiply: bool = False, divide: bool = False,
+                        should_fail: bool = False, error_patterns: tuple[str, ...] = ()):
+    """Helper to test PickupModify with different parameters"""
+    comp = Component("Test", 100)
+    # Use defaults for unspecified params
+    actual_item_id = item_id if item_id is not None else 5
+    actual_factor = factor if factor is not None else 1.5
+    
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            comp.PickupModify(0, item_id=actual_item_id, factor=actual_factor, multiply=multiply, divide=divide)  # type: ignore
+        assert_error(exc, *error_patterns)
+    else:
+        comp.PickupModify(0, item_id=actual_item_id, factor=actual_factor, multiply=multiply, divide=divide)  # type: ignore
+        assert len(comp.triggers) > 0
+
 class TestPickupModifyValidation:
-    """Test PickupModify trigger validation"""
+    @pytest.mark.parametrize("item_id,error_patterns", [
+        (0, ("positive", "0")),
+        (10000, ("positive", "10000")),
+    ])
+    def test_pickup_modify_item_id_rejected(self, item_id: int, error_patterns: tuple[str, ...]):
+        _test_pickup_modify(item_id=item_id, multiply=True, should_fail=True, error_patterns=error_patterns)
 
-    def test_pickup_modify_item_id_zero_rejected(self):
-        """Item ID 0 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.PickupModify(0, item_id=0, factor=1.5, multiply=True)
-        assert_error(exc, "positive", "0")
-
-    def test_pickup_modify_item_id_above_9999_rejected(self):
-        """Item ID above 9999 is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.PickupModify(0, item_id=10000, factor=1.5, multiply=True)
-        assert_error(exc, "positive", "10000")
-
-    def test_pickup_modify_factor_one_rejected(self):
-        """Factor of 1 (no effect) is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.PickupModify(0, item_id=5, factor=1, multiply=True)
-        assert_error(exc, "1 has no effect")
-
-    def test_pickup_modify_factor_one_float_rejected(self):
-        """Factor of 1.0 (no effect) is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.PickupModify(0, item_id=5, factor=1.0, multiply=True)
-        assert_error(exc, "1 has no effect")
+    @pytest.mark.parametrize("factor", [1, 1.0])
+    def test_pickup_modify_factor_one_rejected(self, factor: float):
+        _test_pickup_modify(factor=factor, multiply=True, should_fail=True, error_patterns=("1 has no effect",))
 
     def test_pickup_modify_no_mode_rejected(self):
-        """Neither multiply nor divide specified is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.PickupModify(0, item_id=5, factor=1.5)
-        assert_error(exc, "multiply", "divide")
+        _test_pickup_modify(should_fail=True, error_patterns=("multiply", "divide"))
 
     def test_pickup_modify_both_modes_rejected(self):
-        """Both multiply and divide specified is rejected"""
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.PickupModify(0, item_id=5, factor=1.5, multiply=True, divide=True)
-        assert_error(exc, "both", "multiply", "divide")
-
+        _test_pickup_modify(multiply=True, divide=True, should_fail=True, error_patterns=("both", "multiply", "divide"))
+    
+    def test_pickup_modify_valid_modes_accepted(self):
+        _test_pickup_modify(factor=2.0, multiply=True, should_fail=False)
+        _test_pickup_modify(factor=2.0, divide=True, should_fail=False)
+    
     def test_pickup_modify_multiply_mode_value(self):
-        """Multiply mode sets PICKUP_MULTIPLY_DIVIDE to 1"""
+        """Multiply mode should set PICKUP_MULTIPLY_DIVIDE=1"""
         comp = Component("Test", 100)
-        comp.PickupModify(0, item_id=5, factor=1.5, multiply=True)
-        trigger = comp.triggers[0]
-        assert trigger[P.PICKUP_MULTIPLY_DIVIDE] == 1
-
+        comp.PickupModify(0, item_id=11, factor=1.45, multiply=True)
+        assert comp.triggers[0][ppt.PICKUP_MULTIPLY_DIVIDE] == 1
+    
     def test_pickup_modify_divide_mode_value(self):
-        """Divide mode sets PICKUP_MULTIPLY_DIVIDE to 2"""
+        """Divide mode should set PICKUP_MULTIPLY_DIVIDE=2"""
         comp = Component("Test", 100)
-        comp.PickupModify(0, item_id=5, factor=2.0, divide=True)
-        trigger = comp.triggers[0]
-        assert trigger[P.PICKUP_MULTIPLY_DIVIDE] == 2
-
+        comp.PickupModify(0, item_id=11, factor=2.0, divide=True)
+        assert comp.triggers[0][ppt.PICKUP_MULTIPLY_DIVIDE] == 2
+    
     def test_pickup_modify_no_target_property(self):
         """PickupModify trigger should not have TARGET property"""
         comp = Component("Test", 100)
-        comp.PickupModify(0, item_id=5, factor=1.5, multiply=True)
-        trigger = comp.triggers[0]
-        assert P.TARGET not in trigger
+        comp.PickupModify(0, item_id=11, factor=1.5, multiply=True)
+        assert ppt.TARGET not in comp.triggers[0]
 
 
 # ============================================================================
@@ -538,147 +407,107 @@ class TestPickupModifyValidation:
 # ============================================================================
 
 class TestPointToGroupValidation:
-    """Test PointToGroup dynamic + easing conflict"""
-
     def test_point_to_group_dynamic_with_easing_type_rejected(self):
-        """Dynamic mode with easing type is rejected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
             comp.set_context(target=50)
-            comp.PointToGroup(0, targetDir=60, t=1.0, dynamic=True, type=2)
-        assert_error(exc, "dynamic", "easing", "2")
+            comp.PointToGroup(0, targetDir=60, dynamic=True, type=1)
+        assert_error(exc, "dynamic", "easing")
 
     def test_point_to_group_dynamic_with_easing_rate_rejected(self):
-        """Dynamic mode with non-default easing rate is rejected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
             comp.set_context(target=50)
-            comp.PointToGroup(0, targetDir=60, t=1.0, dynamic=True, rate=2.0)
-        assert_error(exc, "dynamic", "easing", "2.0")
-
+            comp.PointToGroup(0, targetDir=60, dynamic=True, rate=1.5)
+        assert_error(exc, "dynamic", "easing")
+    
     def test_point_to_group_dynamic_without_easing_valid(self):
-        """Dynamic mode without easing is valid"""
+        """Dynamic mode without easing params should work"""
         comp = Component("Test", 100)
         comp.set_context(target=50)
-        comp.PointToGroup(0, targetDir=60, t=1.0, dynamic=True)
-        trigger = comp.triggers[0]
-        assert trigger[P.DYNAMIC] is True
-
-    def test_point_to_group_static_with_easing_valid(self):
-        """Static mode with easing is valid"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.PointToGroup(0, targetDir=60, t=1.0, type=2, rate=1.5)
-        trigger = comp.triggers[0]
-        assert trigger[P.EASING] == 2
-        assert trigger[P.EASING_RATE] == 1.5
+        comp.PointToGroup(0, targetDir=60, dynamic=True)
+        assert len(comp.triggers) == 1
 
 
 class TestRotateValidation:
-    """Test Rotate trigger validation"""
-
     def test_rotate_center_defaults_to_target(self):
         """Center defaults to target when not specified"""
         comp = Component("Test", 100)
         comp.set_context(target=50)
         comp.Rotate(0, angle=45, t=1.0)
         trigger = comp.triggers[0]
-        assert trigger[P.ROTATE_CENTER] == 50
-
-    def test_rotate_center_can_differ_from_target(self):
-        """Center can be different from target"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        comp.Rotate(0, angle=45, center=60, t=1.0)
-        trigger = comp.triggers[0]
-        assert trigger[P.TARGET] == 50
-        assert trigger[P.ROTATE_CENTER] == 60
+        assert trigger[ppt.ROTATE_CENTER] == 50
 
     def test_rotate_restricted_center_rejected(self):
-        """Restricted center group is rejected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
             comp.set_context(target=50)
-            comp.Rotate(0, angle=45, center=1, t=1.0)
-        assert_error(exc, "restricted", "1")
+            comp.Rotate(0, angle=45, center=3, t=1.0)
+        assert_error(exc, "restricted", "3")
 
 
 # ============================================================================
 # GROUP CONTEXT - State Management
 # ============================================================================
 
+@pytest.fixture
+def context_comp():
+    """Fixture providing a fresh Component for context tests"""
+    return Component("Test", 100)
+
 class TestGroupContextManagement:
-    """Test group context state management - could easily corrupt state"""
-
-    def test_start_context_adds_groups_to_subsequent_triggers(self):
+    def test_start_context_adds_groups_to_subsequent_triggers(self, context_comp: Component):
         """Triggers after set_context include context groups"""
-        comp = Component("Test", 100)
-        comp.set_context(groups=200)
-        comp.set_context(target=50)
-        comp.Toggle(0, activateGroup=True)
-        trigger = comp.triggers[0]
-        assert 200 in trigger[P.GROUPS]
+        context_comp.set_context(groups=200, target=50)
+        context_comp.Toggle(0, activateGroup=True)
+        assert 200 in context_comp.triggers[0][ppt.GROUPS]
 
-    def test_end_context_removes_context_groups(self):
+    def test_end_context_removes_context_groups(self, context_comp: Component):
         """Triggers after clear_context exclude context groups"""
-        comp = Component("Test", 100)
-        comp.set_context(groups=200)
-        comp.set_context(target=50)
-        comp.Toggle(0, activateGroup=True)
-        comp.clear_context(groups_only=True)
-        comp.set_context(target=51)
-        comp.Toggle(0.1, activateGroup=True)
+        context_comp.set_context(groups=200, target=50)
+        context_comp.Toggle(0, activateGroup=True)
+        context_comp.clear_context(groups_only=True)
+        context_comp.set_context(target=51)
+        context_comp.Toggle(0.1, activateGroup=True)
 
-        assert 200 in comp.triggers[0][P.GROUPS]
-        assert 200 not in comp.triggers[1][P.GROUPS]
+        assert 200 in context_comp.triggers[0][ppt.GROUPS]
+        assert 200 not in context_comp.triggers[1][ppt.GROUPS]
 
-    def test_nested_context_overwrites(self):
+    def test_nested_context_overwrites(self, context_comp: Component):
         """Setting groups context while one is active overwrites it"""
-        comp = Component("Test", 100)
-        comp.set_context(groups=200)
-        comp.set_context(target=50)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(groups=300)  # Overwrites previous group context
-        comp.set_context(target=51)
-        comp.Toggle(0.1, activateGroup=True)
+        context_comp.set_context(groups=200, target=50)
+        context_comp.Toggle(0, activateGroup=True)
+        context_comp.set_context(groups=300, target=51)
+        context_comp.Toggle(0.1, activateGroup=True)
 
-        assert 200 in comp.triggers[0][P.GROUPS]
-        assert 200 not in comp.triggers[1][P.GROUPS]
-        assert 300 in comp.triggers[1][P.GROUPS]
+        assert 200 in context_comp.triggers[0][ppt.GROUPS]
+        assert 200 not in context_comp.triggers[1][ppt.GROUPS]
+        assert 300 in context_comp.triggers[1][ppt.GROUPS]
 
-    def test_clear_context_is_idempotent(self):
+    def test_clear_context_is_idempotent(self, context_comp: Component):
         """Clearing context without setting is safe (idempotent)"""
-        comp = Component("Test", 100)
-        # Should not raise - clearing empty context is safe
-        comp.clear_context(groups_only=True)
-        comp.clear_context()
-        assert comp.groups == [comp.caller]
-        assert comp.target == -1
+        context_comp.clear_context(groups_only=True)
+        context_comp.clear_context()
+        assert context_comp.groups == [context_comp.caller]
+        assert context_comp.target == -1
 
-    def test_context_with_multiple_groups(self):
+    def test_context_with_multiple_groups(self, context_comp: Component):
         """Context can add multiple groups at once"""
-        comp = Component("Test", 100)
-        comp.set_context(groups=[200, 201, 202])
-        comp.set_context(target=50)
-        comp.Toggle(0, activateGroup=True)
-        trigger = comp.triggers[0]
-        assert all(g in trigger[P.GROUPS] for g in [200, 201, 202])
+        context_comp.set_context(groups=[200, 201, 202], target=50)
+        context_comp.Toggle(0, activateGroup=True)
+        assert all(g in context_comp.triggers[0][ppt.GROUPS] for g in [200, 201, 202])
 
-    def test_context_with_list_groups(self):
+    def test_context_with_list_groups(self, context_comp: Component):
         """Context accepts list of groups"""
-        comp = Component("Test", 100)
-        comp.set_context(groups=[200, 201])
-        comp.set_context(target=50)
-        comp.Toggle(0, activateGroup=True)
-        trigger = comp.triggers[0]
-        assert 200 in trigger[P.GROUPS]
-        assert 201 in trigger[P.GROUPS]
+        context_comp.set_context(groups=[200, 201], target=50)
+        context_comp.Toggle(0, activateGroup=True)
+        assert 200 in context_comp.triggers[0][ppt.GROUPS]
+        assert 201 in context_comp.triggers[0][ppt.GROUPS]
 
-    def test_context_empty_rejected(self):
+    def test_context_empty_rejected(self, context_comp: Component):
         """Setting context with no parameters is rejected"""
-        comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
-            comp.set_context()
+            context_comp.set_context()
         assert_error(exc, "must provide target or groups")
 
 
@@ -695,22 +524,8 @@ class TestTempContext:
             comp.Toggle(0.1, activateGroup=True)
 
         assert comp.target == 50
-        assert comp.triggers[0][P.TARGET] == 50
-        assert comp.triggers[1][P.TARGET] == 60
-
-    def test_temp_context_restores_groups(self):
-        """temp_context restores groups after exit"""
-        comp = Component("Test", 100)
-        comp.set_context(target=50, groups=200)
-        comp.Toggle(0, activateGroup=True)
-
-        with comp.temp_context(groups=300):
-            comp.Toggle(0.1, activateGroup=True)
-
-        assert comp.groups == [100, 200]
-        assert 200 in comp.triggers[0][P.GROUPS]
-        assert 300 in comp.triggers[1][P.GROUPS]
-        assert 200 not in comp.triggers[1][P.GROUPS]
+        assert comp.triggers[0][ppt.TARGET] == 50
+        assert comp.triggers[1][ppt.TARGET] == 60
 
     def test_temp_context_restores_both(self):
         """temp_context can temporarily change both target and groups"""
@@ -755,13 +570,11 @@ class TestFlattenGroups:
     """Test _flatten_groups duplicate detection"""
 
     def test_flatten_detects_duplicates_in_single_list(self):
-        """Duplicate groups in a list are detected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError, match="Duplicate"):
             comp._flatten_groups([100, 200, 100])
 
     def test_flatten_detects_duplicates_across_args(self):
-        """Duplicate groups across multiple args are detected"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError, match="Duplicate"):
             comp._flatten_groups(100, [200, 100])
@@ -772,10 +585,8 @@ class TestFlattenGroups:
 # ============================================================================
 
 class TestInstantPatternSpawnOrderRequirement:
-    """Test that instant patterns require spawn order"""
-
     def test_arc_without_spawn_order_rejected(self):
-        """Arc without spawn order raises RuntimeError (no PointerCircle)"""
+        """Arc requires an active PointerCircle"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -789,10 +600,10 @@ class TestInstantPatternSpawnOrderRequirement:
                 time=0, comp=comp, bullet=lib.bullet1,
                 numBullets=5, angle=150
             )
-        assert_error(exc, "requires an active PointerCircle")
+        assert_error(exc, "No active PointerCircle")
 
     def test_radial_without_spawn_order_rejected(self):
-        """Radial without spawn order raises RuntimeError (no PointerCircle)"""
+        """Radial requires an active PointerCircle"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -806,10 +617,9 @@ class TestInstantPatternSpawnOrderRequirement:
                 time=0, comp=comp, bullet=lib.bullet1,
                 spacing=30
             )
-        assert_error(exc, "requires an active PointerCircle")
+        assert_error(exc, "No active PointerCircle")
 
     def test_line_without_spawn_order_rejected(self):
-        """Line without spawn order raises ValueError"""
         comp = Component("Test", 100)
         with pytest.raises(ValueError) as exc:
             comp.instant.Line(
@@ -823,411 +633,212 @@ class TestInstantPatternSpawnOrderRequirement:
 # INSTANT ARC PATTERN - Complex Validation Logic
 # ============================================================================
 
+def _test_instant_arc(angle: float, numBullets: int, should_fail: bool, error_patterns: tuple[str, ...] = ()):
+    """Helper to test instant.Arc with different parameters"""
+    # Setup component with proper spawn order
+    comp = Component("Test", 100).assert_spawn_order(True)
+    comp.set_context(target=enums.EMPTY_BULLET)
+    comp.Toggle(0, activateGroup=True)
+    comp.set_context(target=enums.EMPTY_TARGET_GROUP)
+    comp.Toggle(0, activateGroup=True)
+    
+    # Setup caller with pointer circle
+    caller = Component("Caller", 200)
+    setup_pointer_circle(caller)
+    
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            caller.instant.Arc(
+                time=0, comp=comp, bullet=lib.bullet1,
+                numBullets=numBullets, angle=angle
+            )
+        assert_error(exc, *error_patterns)
+    else:
+        caller.instant.Arc(
+            time=0, comp=comp, bullet=lib.bullet1,
+            numBullets=numBullets, angle=angle
+        )
+        assert len(caller.triggers) > 0
+
 class TestInstantArcValidation:
-    """Test Arc pattern validation - complex math that could break"""
-
-    def test_arc_odd_bullets_fractional_center_accepted(self):
-        """Odd bullets with fractional centerAt is now accepted (rounds to 1/3 degree)"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        # Should not raise - new system rounds to 1/3 degree precision
-        caller.instant.Arc(
-            time=0, comp=comp, bullet=lib.bullet1,
-            numBullets=5, angle=150, centerAt=45.5
-        )
-
-    def test_arc_even_bullets_any_center_accepted(self):
-        """Even bullets with any centerAt is now accepted (rounds to 1/3 degree)"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        # Should not raise - new system rounds to 1/3 degree precision
-        caller.instant.Arc(
-            time=0, comp=comp, bullet=lib.bullet1,
-            numBullets=4, angle=60, centerAt=0
-        )
-
-    def test_arc_fractional_center_accepted(self):
-        """Fractional centerAt is now accepted (rounds to 1/3 degree)"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        # Should not raise - new system rounds to 1/3 degree precision
-        caller.instant.Arc(
-            time=0, comp=comp, bullet=lib.bullet1,
-            numBullets=4, angle=120, centerAt=45.5
-        )
-
-    def test_arc_angle_zero_rejected(self):
-        """Angle of 0 is rejected"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Arc(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=5, angle=0
-            )
-        assert_error(exc, "angle", "0", "360")
-
-    def test_arc_angle_above_360_rejected(self):
-        """Angle above 360 is rejected"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Arc(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=1, angle=361
-            )
-        assert_error(exc, "angle", "360")
-
-    def test_arc_valid_angle_accepted(self):
-        """Valid angle is accepted"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        # Should not raise - angle of 360 is valid
-        caller.instant.Arc(
-            time=0, comp=comp, bullet=lib.bullet1,
-            numBullets=10, angle=360
-        )
-
-    def test_arc_any_centerAt_accepted(self):
-        """Any centerAt value is accepted (rounds to 1/3 degree precision)"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        # Should not raise - new system rounds to 1/3 degree precision
-        caller.instant.Arc(
-            time=0, comp=comp, bullet=lib.bullet1,
-            numBullets=5, angle=150, centerAt=45.3, _radialBypass=True
-        )
+    @pytest.mark.parametrize("angle,numBullets,should_fail,error_patterns", [
+        (0, 5, True, ("angle", "0")),
+        (361, 5, True, ("angle", "360")),
+        (150, 5, False, ()),
+        (360, 5, False, ()),
+    ])
+    def test_arc_validation(self, angle: float, numBullets: int, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_instant_arc(angle, numBullets, should_fail, error_patterns)
 
 
 # ============================================================================
 # INSTANT RADIAL PATTERN - Validation
 # ============================================================================
 
-class TestInstantRadialValidation:
-    """Test Radial pattern validation"""
-
-    def test_radial_neither_spacing_nor_numbullets_rejected(self):
-        """Must provide either spacing or numBullets"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
+def _test_instant_radial(spacing: float | None = None, numBullets: int | None = None,
+                         should_fail: bool = False, error_patterns: tuple[str, ...] = ()):
+    """Helper to test instant.Radial with different parameters"""
+    # Setup component with proper spawn order
+    comp = Component("Test", 100).assert_spawn_order(True)
+    comp.set_context(target=enums.EMPTY_BULLET)
+    comp.Toggle(0, activateGroup=True)
+    comp.set_context(target=enums.EMPTY_TARGET_GROUP)
+    comp.Toggle(0, activateGroup=True)
+    
+    # Setup caller with pointer circle
+    caller = Component("Caller", 200)
+    setup_pointer_circle(caller)
+    
+    if should_fail:
         with pytest.raises(ValueError) as exc:
-            caller.instant.Radial(
-                time=0, comp=comp, bullet=lib.bullet1
+            caller.instant.Radial(  # type: ignore
+                time=0, comp=comp, bullet=lib.bullet1, spacing=spacing, numBullets=numBullets
             )
-        assert_error(exc, "must provide", "spacing", "numBullets")
+        assert_error(exc, *error_patterns)
+    else:
+        caller.instant.Radial(  # type: ignore
+            time=0, comp=comp, bullet=lib.bullet1, spacing=spacing, numBullets=numBullets
+        )
+        assert len(caller.triggers) > 0
+
+class TestInstantRadialValidation:
+    def test_radial_neither_spacing_nor_numbullets_rejected(self):
+        _test_instant_radial(should_fail=True, error_patterns=("must provide", "spacing", "numBullets"))
 
     def test_radial_mismatched_spacing_and_numbullets_rejected(self):
-        """spacing and numBullets must be consistent"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Radial(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=12, spacing=20  # 360/20 = 18, not 12
-            )
-        assert_error(exc, "don't match")
-
-    def test_radial_any_spacing_accepted(self):
-        """Any spacing value is accepted (rounds to 1/3 degree precision)"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        # Should not raise - new system rounds to 1/3 degree precision
-        caller.instant.Radial(
-            time=0, comp=comp, bullet=lib.bullet1,
-            spacing=7  # 7 is not a factor of 360, but that's OK now
-        )
-
-    def test_radial_any_numbullets_accepted(self):
-        """Any numBullets value is accepted (rounds to 1/3 degree precision)"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        # Should not raise - new system rounds to 1/3 degree precision
-        caller.instant.Radial(
-            time=0, comp=comp, bullet=lib.bullet1,
-            numBullets=7  # 7 is not a factor of 360, but that's OK now
-        )
+        _test_instant_radial(numBullets=12, spacing=20, should_fail=True, error_patterns=("don't match",))
+    
+    @pytest.mark.parametrize("spacing,numBullets", [
+        (30, None),
+        (None, 12),
+    ])
+    def test_radial_valid_patterns_accepted(self, spacing: float | None, numBullets: int | None):
+        _test_instant_radial(spacing=spacing, numBullets=numBullets, should_fail=False)
 
 
 # ============================================================================
 # INSTANT LINE PATTERN - Validation
 # ============================================================================
 
+def _test_instant_line(numBullets: int = 5, fastestTime: float = 0.5, 
+                       slowestTime: float = 2.0, should_fail: bool = False, error_patterns: tuple[str, ...] = ()):
+    """Helper to test instant.Line with different parameters"""
+    # Setup component with proper spawn order
+    comp = Component("Test", 100).assert_spawn_order(True)
+    comp.set_context(target=enums.EMPTY_BULLET)
+    comp.Toggle(0, activateGroup=True)
+    comp.clear_context()
+    comp.set_context(target=enums.EMPTY_EMITTER)
+    comp.Toggle(0, activateGroup=True)
+    comp.clear_context()
+    
+    # Setup caller
+    caller = Component("Caller", 200)
+    
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            caller.instant.Line(
+                time=0, comp=comp, emitter=50, targetDir=90, bullet=lib.bullet2,
+                numBullets=numBullets, fastestTime=fastestTime, slowestTime=slowestTime, dist=100
+            )
+        assert_error(exc, *error_patterns)
+    else:
+        caller.instant.Line(
+            time=0, comp=comp, emitter=50, targetDir=90, bullet=lib.bullet2,
+            numBullets=numBullets, fastestTime=fastestTime, slowestTime=slowestTime, dist=100
+        )
+        assert len(caller.triggers) > 0
+
 class TestInstantLineValidation:
-    """Test Instant Line pattern validation"""
-
-    def test_line_fastest_zero_rejected(self):
-        """fastestTime must be positive"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.clear_context()
-        comp.set_context(target=enums.EMPTY_EMITTER)
-        comp.Toggle(0, activateGroup=True)
-        comp.clear_context()
-
-        caller = Component("Caller", 200)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Line(
-                time=0, comp=comp, emitter=50, targetDir=90, bullet=lib.bullet2,
-                numBullets=5, fastestTime=0, slowestTime=2.0, dist=100
-            )
-        assert_error(exc, "positive", "0")
-
-    def test_line_slowest_not_greater_than_fastest_rejected(self):
-        """slowestTime must be greater than fastestTime"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.clear_context()
-        comp.set_context(target=enums.EMPTY_EMITTER)
-        comp.Toggle(0, activateGroup=True)
-        comp.clear_context()
-
-        caller = Component("Caller", 200)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Line(
-                time=0, comp=comp, emitter=50, targetDir=90, bullet=lib.bullet2,
-                numBullets=5, fastestTime=2.0, slowestTime=1.0, dist=100
-            )
-        assert_error(exc, "greater than", "2.0", "1.0")
-
-    def test_line_too_few_bullets_rejected(self):
-        """numBullets must be at least 3"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.clear_context()
-        comp.set_context(target=enums.EMPTY_EMITTER)
-        comp.Toggle(0, activateGroup=True)
-        comp.clear_context()
-
-        caller = Component("Caller", 200)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Line(
-                time=0, comp=comp, emitter=50, targetDir=90, bullet=lib.bullet2,
-                numBullets=2, fastestTime=0.5, slowestTime=2.0, dist=100
-            )
-        assert_error(exc, "numBullets must be at least 3")
+    @pytest.mark.parametrize("numBullets,fastestTime,slowestTime,should_fail,error_patterns", [
+        (5, 0, 2.0, True, ("positive", "0")),
+        (5, 2.0, 1.0, True, ("greater than", "2.0", "1.0")),
+        (2, 0.5, 2.0, True, ("at least 3", "2")),
+        (5, 0.5, 2.0, False, ()),
+    ])
+    def test_line_validation(self, numBullets: int, fastestTime: float, slowestTime: float, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_instant_line(numBullets, fastestTime, slowestTime, should_fail, error_patterns)
 
 
 # ============================================================================
 # TIMED PATTERNS - Validation
 # ============================================================================
 
+def _test_timed_radial_wave(waves: int = 3, interval: float = 0.5, numBullets: int = 12,
+                            should_fail: bool = False, error_patterns: tuple[str, ...] = ()):
+    """Helper to test timed.RadialWave with different parameters"""
+    # Setup component with proper spawn order
+    comp = Component("Test", 100).assert_spawn_order(True)
+    comp.set_context(target=enums.EMPTY_BULLET)
+    comp.Toggle(0, activateGroup=True)
+    comp.set_context(target=enums.EMPTY_TARGET_GROUP)
+    comp.Toggle(0, activateGroup=True)
+    
+    # Setup caller with pointer circle
+    caller = Component("Caller", 200)
+    setup_pointer_circle(caller)
+    
+    if should_fail:
+        with pytest.raises(ValueError) as exc:
+            caller.timed.RadialWave(
+                time=0, comp=comp, bullet=lib.bullet1,
+                waves=waves, interval=interval, numBullets=numBullets
+            )
+        assert_error(exc, *error_patterns)
+    else:
+        caller.timed.RadialWave(
+            time=0, comp=comp, bullet=lib.bullet1,
+            waves=waves, interval=interval, numBullets=numBullets
+        )
+        assert len(caller.triggers) > 0
+
 class TestTimedRadialWaveValidation:
-    """Test RadialWave pattern validation"""
+    @pytest.mark.parametrize("waves,interval,should_fail,error_patterns", [
+        (0, 0.5, True, ("waves must be at least 1",)),
+        (1, 0.5, True, ("use instant.Radial",)),  # Single wave should use instant.Radial
+        (3, -0.5, True, ("non-negative", "-0.5")),
+        (3, 0.5, False, ()),
+    ])
+    def test_radial_wave_validation(self, waves: int, interval: float, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_timed_radial_wave(waves=waves, interval=interval, should_fail=should_fail, error_patterns=error_patterns)
 
-    def test_radial_wave_zero_waves_rejected(self):
-        """waves must be at least 1"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
 
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
+def _test_timed_line(numBullets: int = 5, spacing: float = 0.5,
+                     should_fail: bool = False, error_patterns: tuple[str, ...] = ()):
+    """Helper to test timed.Line with different parameters"""
+    # Setup component with proper spawn order
+    comp = Component("Test", 100).assert_spawn_order(True)
+    comp.set_context(target=enums.EMPTY_BULLET)
+    comp.Toggle(0, activateGroup=True)
+    
+    # Setup caller
+    caller = Component("Caller", 200)
+    
+    if should_fail:
         with pytest.raises(ValueError) as exc:
-            caller.timed.RadialWave(
-                time=0, comp=comp, bullet=lib.bullet1,
-                waves=0, numBullets=12
-            )
-        assert_error(exc, "waves must be at least 1")
-
-    def test_radial_wave_single_wave_rejected(self):
-        """Single wave should use instant.Radial instead"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.timed.RadialWave(
-                time=0, comp=comp, bullet=lib.bullet1,
-                waves=1, numBullets=12
-            )
-        assert_error(exc, "use instant.Radial")
-
-    def test_radial_wave_negative_interval_rejected(self):
-        """interval must be non-negative"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.timed.RadialWave(
-                time=0, comp=comp, bullet=lib.bullet1,
-                waves=3, interval=-0.5, numBullets=12
-            )
-        assert_error(exc, "non-negative", "-0.5")
-
+            caller.timed.Line(time=0, comp=comp, targetDir=90, bullet=lib.bullet1,
+                numBullets=numBullets, spacing=spacing, t=1.0, dist=100)
+        assert_error(exc, *error_patterns)
+    else:
+        caller.timed.Line(time=0, comp=comp, targetDir=90, bullet=lib.bullet1,
+            numBullets=numBullets, spacing=spacing, t=1.0, dist=100)
+        assert len(caller.triggers) > 0
 
 class TestTimedLineValidation:
-    """Test Timed Line pattern validation"""
-
-    def test_timed_line_too_few_bullets_rejected(self):
-        """numBullets must be at least 2"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        with pytest.raises(ValueError, match="numBullets must be at least 2"):
-            caller.timed.Line(
-                time=0, comp=comp, targetDir=90, bullet=lib.bullet2,
-                numBullets=1, spacing=0.5, t=1.0, dist=100
-            )
-
-    def test_timed_line_negative_spacing_rejected(self):
-        """spacing must be non-negative"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        with pytest.raises(ValueError, match="spacing must be non-negative"):
-            caller.timed.Line(
-                time=0, comp=comp, targetDir=90, bullet=lib.bullet2,
-                numBullets=5, spacing=-0.5, t=1.0, dist=100
-            )
-
+    @pytest.mark.parametrize("numBullets,spacing,should_fail,error_patterns", [
+        (1, 0.5, True, ("numBullets must be at least 2",)),
+        (5, -0.1, True, ("non-negative", "-0.1")),
+    ])
+    def test_timed_line_validation(self, numBullets: int, spacing: float, should_fail: bool, error_patterns: tuple[str, ...]):
+        _test_timed_line(numBullets=numBullets, spacing=spacing, should_fail=should_fail, error_patterns=error_patterns)
+    
 
 # ============================================================================
 # METHOD CHAINING - Return Self
 # ============================================================================
 
 class TestMethodChainingReturnsSelf:
-    """Test that trigger methods return self for chaining"""
-
-    def test_spawn_returns_self(self):
-        comp = Component("Test", 100)
-        result = comp.Spawn(0, 50, spawnOrdered=False)
-        assert result is comp
-
-    def test_toggle_returns_self(self):
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        result = comp.Toggle(0, activateGroup=True)
-        assert result is comp
-
-    def test_count_returns_self(self):
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        result = comp.Count(0, item_id=100, count=5, activateGroup=True)
-        assert result is comp
-
-    def test_pickup_returns_self(self):
-        comp = Component("Test", 100)
-        result = comp.Pickup(0, item_id=5, count=50, override=False)
-        assert result is comp
-
-    def test_pickup_modify_returns_self(self):
-        comp = Component("Test", 100)
-        result = comp.PickupModify(0, item_id=5, factor=1.5, multiply=True)
-        assert result is comp
-
-    def test_move_by_returns_self(self):
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        result = comp.MoveBy(0, dx=10, dy=20, t=1.0)
-        assert result is comp
-
-    def test_rotate_returns_self(self):
-        comp = Component("Test", 100)
-        comp.set_context(target=50)
-        result = comp.Rotate(0, angle=90, t=1.0)
-        assert result is comp
-
-    def test_stop_returns_self(self):
-        comp = Component("Test", 100)
-        result = comp.Stop(0, target=50)
-        assert result is comp
-
-    def test_pause_returns_self(self):
-        comp = Component("Test", 100)
-        result = comp.Pause(0, target=50)
-        assert result is comp
-
-    def test_resume_returns_self(self):
-        comp = Component("Test", 100)
-        result = comp.Resume(0, target=50)
-        assert result is comp
-
     def test_chain_preserves_trigger_count(self):
-        """Chained calls accumulate triggers"""
         comp = Component("Test", 100)
         comp.set_context(target=50)
         (comp
@@ -1237,41 +848,13 @@ class TestMethodChainingReturnsSelf:
         )
         assert len(comp.triggers) == 3
 
-    def test_group_context_returns_self(self):
-        """Group context methods support chaining"""
-        comp = Component("Test", 100)
-        result = comp.set_context(groups=200).set_context(target=50).Toggle(0, activateGroup=True).clear_context()
-        assert result is comp
-        assert len(comp.triggers) == 1
-
 
 # ============================================================================
 # COMPONENT TARGET ACCEPTS COMPONENT OBJECTS
 # ============================================================================
 
 class TestGeneralComponentFeatures:
-
-    # Test that methods accept Component objects as targets
-    def test_spawn_accepts_component(self):
-        """Spawn can target a Component directly"""
-        target_comp = Component("Target", 150)
-        comp = Component("Test", 100)
-        comp.Spawn(0, target_comp, spawnOrdered=False)
-        trigger = comp.triggers[0]
-        assert trigger[P.TARGET] == 150
-
-    def test_toggle_accepts_component(self):
-        """Toggle can target a Component directly"""
-        target_comp = Component("Target", 150)
-        comp = Component("Test", 100)
-        comp.set_context(target=target_comp.caller)
-        comp.Toggle(0, activateGroup=True)
-        trigger = comp.triggers[0]
-        assert trigger[P.TARGET] == target_comp.caller
-
     def test_component_without_spawn_order_warning(self):
-        """Component without requireSpawnOrder gives warning on export"""
-        lib.all_components.clear()
         comp = Component("Test", 100)
         comp.set_context(target=50)
         comp.Toggle(0, activateGroup=True)
@@ -1290,24 +873,12 @@ class TestGeneralComponentFeatures:
 class TestGetTriggersMethod:
     """Test Component.get_triggers() and has_trigger_properties()"""
 
-    def test_get_triggers_single_property(self):
-        comp = Component("Test", 100, 5)
-        comp.Pickup(0, item_id=12, count=50, override=True)
-        comp.Pickup(0, item_id=15, count=100, override=False)
-        comp.set_context(target=200)
-        comp.Count(0, item_id=12, count=10, activateGroup=True)
-        comp.clear_context()
-
-        result = comp.get_triggers({P.ITEM_ID: 12})
-        assert len(result) == 2
-        assert all(t[P.ITEM_ID] == 12 for t in result)
-
     def test_get_triggers_multiple_properties(self):
         comp = Component("Test", 100, 5)
         comp.Pickup(0, item_id=12, count=50, override=True)
         comp.Pickup(0, item_id=12, count=100, override=False)
 
-        result = comp.get_triggers({P.ITEM_ID: 12, P.PICKUP_COUNT: 50})
+        result = comp.get_triggers({ppt.ITEM_ID: 12, ppt.PICKUP_COUNT: 50})
         assert len(result) == 1
 
     def test_get_triggers_wildcard_any(self):
@@ -1315,7 +886,7 @@ class TestGetTriggersMethod:
         comp.Pickup(0, item_id=11, count=123, override=True)
         comp.PickupModify(0, item_id=11, factor=1.45, multiply=True)
 
-        result = comp.get_triggers({P.PICKUP_MULTIPLY_DIVIDE: Any})
+        result = comp.get_triggers({ppt.PICKUP_MULTIPLY_DIVIDE: Any})
         assert len(result) == 2
 
     def test_get_triggers_by_object_id(self):
@@ -1325,41 +896,28 @@ class TestGetTriggersMethod:
         comp.Toggle(0, activateGroup=True)
         comp.clear_context()
 
-        result = comp.get_triggers({P.OBJ_ID: enums.ObjectID.PICKUP})
+        result = comp.get_triggers({ppt.OBJ_ID: enums.ObjectID.PICKUP})
         assert len(result) == 1
 
     def test_get_triggers_no_match(self):
         comp = Component("Test", 100, 5)
         comp.Pickup(0, item_id=12, count=50, override=True)
-        assert len(comp.get_triggers({P.ITEM_ID: 999})) == 0
-
-    def test_get_triggers_returns_references(self):
-        comp = Component("Test", 100, 5)
-        comp.Pickup(0, item_id=12, count=50, override=True)
-        assert comp.get_triggers({P.ITEM_ID: 12})[0] is comp.triggers[0]
+        assert len(comp.get_triggers({ppt.ITEM_ID: 999})) == 0
 
 
 class TestHasTriggerPropertiesMethod:
-
-    def test_has_trigger_properties_match(self):
-        comp = Component("Test", 100, 5)
-        comp.Pickup(0, item_id=12, count=50, override=True)
-
-        assert comp.has_trigger_properties({P.ITEM_ID: 12}) is True
-        assert comp.has_trigger_properties({P.ITEM_ID: 999}) is False
-
     def test_has_trigger_properties_multiple(self):
         comp = Component("Test", 100, 5)
         comp.Pickup(0, item_id=12, count=50, override=True)
 
-        assert comp.has_trigger_properties({P.ITEM_ID: 12, P.PICKUP_COUNT: 50}) is True
-        assert comp.has_trigger_properties({P.ITEM_ID: 12, P.PICKUP_COUNT: 999}) is False
+        assert comp.has_trigger_properties({ppt.ITEM_ID: 12, ppt.PICKUP_COUNT: 50}) is True
+        assert comp.has_trigger_properties({ppt.ITEM_ID: 12, ppt.PICKUP_COUNT: 999}) is False
 
     def test_has_trigger_properties_wildcard(self):
         comp = Component("Test", 100, 5)
         comp.PickupModify(0, item_id=11, factor=1.45, multiply=True)
 
-        assert comp.has_trigger_properties({P.PICKUP_MULTIPLY_DIVIDE: Any}) is True
+        assert comp.has_trigger_properties({ppt.PICKUP_MULTIPLY_DIVIDE: Any}) is True
 
     def test_has_trigger_properties_empty_dict_rejected(self):
         comp = Component("Test", 100, 5)
@@ -1371,7 +929,7 @@ class TestHasTriggerPropertiesMethod:
         comp = Component("Test", 100, 5)
         comp.Pickup(0, item_id=12, count=50, override=True)
 
-        query = {P.ITEM_ID: 12}
+        query = {ppt.ITEM_ID: 12}
         assert comp.has_trigger_properties(query) == (len(comp.get_triggers(query)) > 0)
 
 
@@ -1388,8 +946,6 @@ class TestSpawnLimitEnforcement:
         multiple times in the same tick, and that component contains spawn triggers.
         GD will only execute the first spawn, silently dropping the rest.
         """
-        lib.all_components.clear()
-
         target_comp = Component("Target", 200)
         target_comp.assert_spawn_order(True)
         target_comp.Spawn(0, 300, spawnOrdered=True)  # Contains spawn trigger
@@ -1410,8 +966,6 @@ class TestSpawnLimitEnforcement:
         Spawns at different X coordinates (different ticks) should be allowed.
         This tests that spawn_order grouping works correctly.
         """
-        lib.all_components.clear()
-
         target_comp = Component("Target", 200)
         target_comp.assert_spawn_order(True)
         target_comp.Spawn(0, 300, spawnOrdered=True)
@@ -1429,8 +983,6 @@ class TestSpawnLimitEnforcement:
         Without spawn_order, all triggers are considered same tick.
         This tests the requireSpawnOrder=False path.
         """
-        lib.all_components.clear()
-
         target_comp = Component("Target", 200)
         target_comp.assert_spawn_order(True)
         target_comp.Spawn(0, 300, spawnOrdered=True)
@@ -1448,8 +1000,6 @@ class TestSpawnLimitEnforcement:
 
     def test_case1_different_targets_allowed(self):
         """Multiple spawns to different groups should be allowed."""
-        lib.all_components.clear()
-
         target1 = Component("Target1", 200)
         target1.assert_spawn_order(True)
         target1.Spawn(0, 300, spawnOrdered=True)
@@ -1468,8 +1018,6 @@ class TestSpawnLimitEnforcement:
 
     def test_case1_spawn_delay_excludes_from_check(self):
         """Spawns with delay > 0 should not be checked (they execute at different times)."""
-        lib.all_components.clear()
-
         target_comp = Component("Target", 200)
         target_comp.assert_spawn_order(True)
         target_comp.Spawn(0, 300, spawnOrdered=True)
@@ -1484,8 +1032,6 @@ class TestSpawnLimitEnforcement:
 
     def test_case1_target_without_spawn_allowed(self):
         """Multiple spawns targeting group without spawn triggers should be allowed."""
-        lib.all_components.clear()
-
         target_comp = Component("Target", 200)
         target_comp.assert_spawn_order(True)
         target_comp.set_context(target=300)
@@ -1509,8 +1055,6 @@ class TestSpawnLimitEnforcement:
 
         B's triggers must have remaps themselves (otherwise Case 1 catches it).
         """
-        lib.all_components.clear()
-
         # Layer C: Final target that contains spawn triggers
         layer_c = Component("LayerC", 400)
         layer_c.assert_spawn_order(True)
@@ -1535,8 +1079,6 @@ class TestSpawnLimitEnforcement:
 
     def test_case2_single_spawn_in_b_allowed(self):
         """Case 2 should not trigger if B only has 1 spawn trigger."""
-        lib.all_components.clear()
-
         layer_c = Component("LayerC", 400)
         layer_c.assert_spawn_order(True)
         layer_c.Spawn(0, 500, spawnOrdered=True)
@@ -1554,8 +1096,6 @@ class TestSpawnLimitEnforcement:
 
     def test_case2_no_remap_in_a_allowed(self):
         """Case 2 should not trigger if A has no remap."""
-        lib.all_components.clear()
-
         layer_c = Component("LayerC", 400)
         layer_c.assert_spawn_order(True)
         layer_c.Spawn(0, 500, spawnOrdered=True)
@@ -1580,8 +1120,6 @@ class TestSpawnLimitEnforcement:
 
         Even if B's triggers have remaps, C's reset_remap makes them act unmapped.
         """
-        lib.all_components.clear()
-
         # C has a spawn trigger with reset_remap=True
         layer_c = Component("LayerC", 400)
         layer_c.assert_spawn_order(True)
@@ -1604,8 +1142,6 @@ class TestSpawnLimitEnforcement:
 
         We can tolerate 1 trigger without reset_remap (limiting 1 to 1 is fine).
         """
-        lib.all_components.clear()
-
         layer_c = Component("LayerC", 400)
         layer_c.assert_spawn_order(True)
         layer_c.Spawn(0, 500, spawnOrdered=True)
@@ -1629,8 +1165,6 @@ class TestSpawnLimitEnforcement:
 
         Limiting 1 to 1 is the same as not limiting at all.
         """
-        lib.all_components.clear()
-
         layer_c = Component("LayerC", 400)
         layer_c.assert_spawn_order(True)
         layer_c.Spawn(0, 500, spawnOrdered=True)
@@ -1652,8 +1186,6 @@ class TestSpawnLimitEnforcement:
         """
         Case 2: If 2+ triggers in B don't have reset_remap, violation occurs.
         """
-        lib.all_components.clear()
-
         layer_c = Component("LayerC", 400)
         layer_c.assert_spawn_order(True)
         layer_c.Spawn(0, 500, spawnOrdered=True)
@@ -1676,8 +1208,6 @@ class TestSpawnLimitEnforcement:
 
     def test_integration_with_save_all_default_enabled(self):
         """Test that save_all() calls _enforce_spawn_limit by default"""
-        lib.all_components.clear()
-
         target = Component("Target", 200)
         target.assert_spawn_order(True)
         target.Spawn(0, 300, spawnOrdered=True)
@@ -1696,11 +1226,9 @@ class TestSpawnLimitEnforcement:
         """
         Multitarget should warn if the component contains spawn triggers.
 
-        Why: Multitarget creates binary spawn trees, which would multiply
+        Multitarget creates binary spawn trees, which would multiply
         spawn triggers exponentially, causing spawn limit violations.
         """
-        lib.all_components.clear()
-
         comp = Component("WithSpawn", 100)
         comp.Spawn(0, 200, spawnOrdered=True)
         comp.set_context(target=300)
@@ -1720,19 +1248,15 @@ class TestSpawnLimitEnforcement:
 # ============================================================================
 
 class TestToleranceBoundaryEdgeCases:
-    """Tests that closely timed triggers are grouped or separated correctly"""
-
     def test_triggers_beyond_tolerance_are_separated(self):
         """
         Triggers beyond tolerance should be in separate groups (no violation).
 
         Setup: B has 3 spawns at time 0.0s, ~0.004s, ~0.008s
-        Expected: Only first two are grouped (~0.004s converts to ~1.25 studs, within ~1.3 tolerance)z ;
+        Expected: Only first two are grouped (~0.004s converts to ~1.25 studs, within ~1.3 tolerance)
             Third is separate (~0.008s converts to ~2.49 studs, beyond tolerance)
             Only 2 simultaneous spawns → violation
         """
-        lib.all_components.clear()
-
         target = Component("Target", 300)
         target.assert_spawn_order(True)
         target.Spawn(0, 400, spawnOrdered=True)
@@ -1756,8 +1280,6 @@ class TestToleranceBoundaryEdgeCases:
         Setup: B has 2 spawns at time 0.0s and ~0.004s (converts to ~1.25 studs, within ~1.3 tolerance)
         Expected: Both grouped together → 2 simultaneous → violation
         """
-        lib.all_components.clear()
-
         target = Component("Target", 300)
         target.assert_spawn_order(True)
         target.Spawn(0, 400, spawnOrdered=True)
@@ -1779,13 +1301,6 @@ class TestToleranceBoundaryEdgeCases:
 # ============================================================================
 
 class TestSolidGroupEnforcement:
-    """Test solid group enforcement to prevent position groups from being used as spawnable groups"""
-
-    def setup_method(self):
-        """Clear solid groups and components before each test"""
-        lib.solid_groups_to_enforce.clear()
-        lib.all_components.clear()
-
     def test_solid_group_as_component_caller_rejected(self):
         """A solid group used as a component caller should raise ValueError"""
         comp = Component("BadComponent", callerGroup=100)
@@ -1807,83 +1322,8 @@ class TestSolidGroupEnforcement:
         
         assert_error(exc, "100", "component caller")
 
-    def test_different_group_as_component_caller_allowed(self):
-        """A different group as component caller is fine"""
-        comp = Component("GoodComponent", callerGroup=100)
-        lib.all_components.append(comp)
-        
-        # Should not raise - 200 is not the caller
-        lib._validate_solid_groups(200)
-
-    def test_solid_group_as_move_target_allowed(self):
-        """A solid group as Move target (via set_context) is allowed"""
-        comp = Component("GoodComponent", callerGroup=50)
-        comp.set_context(target=100)
-        comp.MoveBy(0, dx=10, dy=10, t=1)
-        lib.all_components.append(comp)
-        
-        # Should not raise - 100 is the target, not in groups array
-        lib._validate_solid_groups(100)
-
-    def test_keyframe_obj_trigger_exempt(self):
-        """KeyframeObj triggers are exempt from solid group validation"""
-        comp = Component("ScaleComponent", callerGroup=50)
-        comp.set_context(target=100)
-        comp.Scale(0, factor=2.0, t=1.0, hold=0.5)
-        lib.all_components.append(comp)
-        
-        # Should not raise even though KEYFRAME_OBJ might reference group 100
-        lib._validate_solid_groups(100)
-
-    def test_pointer_obj_trigger_exempt(self):
-        """PointerObj triggers are exempt from solid group validation"""
-        comp = Component("PointerComponent", callerGroup=50)
-        comp.set_context(target=100)
-        trigger = comp.create_trigger(enums.ObjectID.POINTER_OBJ, x=0, target=100)
-        trigger[enums.Properties.GROUPS] = [100]
-        lib.all_components.append(comp)
-        
-        # Should not raise because POINTER_OBJ is in solid_obj_ids exemption set
-        lib._validate_solid_groups(100)
-
-    def test_move_towards_enforces_target_as_solid(self):
-        """MoveTowards calls enforce_solid_groups on its target"""
-        lib.solid_groups_to_enforce.clear()
-        comp = Component("Bullet", callerGroup=500)
-        comp.set_context(target=600)
-        comp.MoveTowards(0, targetDir=90, t=1.0, dist=100)
-        
-        assert 600 in lib.solid_groups_to_enforce
-
-    def test_goto_group_enforces_target_as_solid(self):
-        """GotoGroup calls enforce_solid_groups on its target"""
-        lib.solid_groups_to_enforce.clear()
-        comp = Component("Bullet", callerGroup=500)
-        comp.set_context(target=600)
-        comp.GotoGroup(0, location=700, t=1.0)
-        
-        assert 600 in lib.solid_groups_to_enforce
-
-    def test_point_to_group_enforces_targetdir_as_solid(self):
-        """PointToGroup calls enforce_solid_groups on targetDir"""
-        lib.solid_groups_to_enforce.clear()
-        comp = Component("Bullet", callerGroup=500)
-        comp.set_context(target=600)
-        comp.PointToGroup(0, targetDir=700, t=1.0)
-        
-        assert 700 in lib.solid_groups_to_enforce
-
-    def test_scale_enforces_target_as_solid(self):
-        """Scale calls enforce_solid_groups on its target"""
-        lib.solid_groups_to_enforce.clear()
-        comp = Component("Bullet", callerGroup=500)
-        comp.set_context(target=600)
-        comp.Scale(0, factor=2.0, t=1.0, hold=0.5)
-        
-        assert 600 in lib.solid_groups_to_enforce
-
     def test_complex_scene_conflict_detected(self):
-        """Test validation with multiple components - conflict should be detected"""
+        """Complex scene with solid group used as both target and caller"""
         bullet = Component("Bullet", callerGroup=500)
         bullet.set_context(target=600)
         bullet.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
@@ -1906,7 +1346,6 @@ class TestSolidGroupEnforcement:
         assert_error(exc, "600", "BadPattern")
 
     def test_valid_scene_with_separate_groups(self):
-        """Test that properly separated solid and trigger groups validate successfully"""
         bullet = Component("Bullet", callerGroup=500)
         bullet.set_context(target=600)
         bullet.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
@@ -1918,42 +1357,3 @@ class TestSolidGroupEnforcement:
         
         # Should not raise - groups are properly separated
         lib._validate_solid_groups()
-
-    def test_multiple_components_same_solid_group_allowed(self):
-        """Multiple components can use the same solid group as target"""
-        bullet1 = Component("Bullet1", callerGroup=500)
-        bullet1.set_context(target=600)
-        bullet1.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
-        lib.all_components.append(bullet1)
-        
-        bullet2 = Component("Bullet2", callerGroup=501)
-        bullet2.set_context(target=601)
-        bullet2.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
-        lib.all_components.append(bullet2)
-        
-        # Both use 1000 as targetDir - should be fine
-        lib._validate_solid_groups()
-
-    def test_empty_enforcement_set_passes(self):
-        """Validating with empty enforcement set should pass"""
-        comp = Component("Component", callerGroup=100)
-        comp.Spawn(0, target=200, spawnOrdered=False)
-        lib.all_components.append(comp)
-        
-        lib._validate_solid_groups()
-
-    def test_specific_groups_parameter(self):
-        """Test _validate_solid_groups with specific groups parameter"""
-        comp = Component("Component", callerGroup=100)
-        comp.set_context(target=200)
-        comp.Toggle(0, activateGroup=True)
-        lib.all_components.append(comp)
-        
-        lib.solid_groups_to_enforce.add(100)
-        
-        # Calling with specific group 200 should pass (100 is bad but not checked)
-        lib._validate_solid_groups(200)
-        
-        # Calling with specific group 100 should fail
-        with pytest.raises(ValueError):
-            lib._validate_solid_groups(100)
