@@ -21,9 +21,9 @@ c1 = lib.circle1
 # These are invisible groups we move around to use as coordinates
 # ===========================================================================
 
-top_left = lib.pointer.next()[0]
-top_right = lib.pointer.next()[0]
-middle_test = lib.pointer.next()[0]
+top_left = lib.Pointer.next()
+top_right = lib.Pointer.next()
+middle_test = lib.Pointer.next()
 
 # Setup positioning pointers
 pos_setup = (Component("Position Setup", unknown_g(), 11)

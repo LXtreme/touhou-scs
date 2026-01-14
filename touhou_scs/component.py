@@ -130,9 +130,9 @@ def validate_params(*,
                 raise ValueError(f"Target Group '{g}' is out of valid range (1-{c}).")
 
 def enforce_solid_groups(*groups: int):
+    """Mark groups as solid (objects). Validation deferred until export."""
     for g in groups:
-        if g > 9999:
-            raise ValueError(f"Group '{g}' is not a solid group (>9999).")
+        lib.solid_groups_to_enforce.add(g)
 
 
 class Component:

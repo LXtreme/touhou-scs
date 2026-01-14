@@ -9,10 +9,9 @@ const __startTime = Date.now();
 const PROPERTY_REMAP_STRING = '442';
 const PROPERTY_GROUPS = '57';
 const groupPropertyField = (key) => {
-  // Does not include '395' and '401' because
-  // those must be solid groups (1-9999)
-  // and dont need group() wrapping
-	const groupFields = ['51', '71', '76', '373'];
+  // Now includes '395' and '401' because pointers are solid groups
+  // but have IDs > 9999 and need group() wrapping
+	const groupFields = ['51', '71', '76', '373', '395', '401'];
 	return groupFields.includes(key);
 };
 

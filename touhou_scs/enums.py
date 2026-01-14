@@ -32,6 +32,7 @@ class ObjectID(IntEnum):
     ADVANCED_RANDOM = 2068
     KEYFRAME_OBJ = 3032
     KEYFRAME_ANIM = 3033
+    POINTER_OBJ = 3802
 
 
 # ============================================================================
