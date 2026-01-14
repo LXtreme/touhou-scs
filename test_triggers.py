@@ -22,7 +22,7 @@ from typing import Any
 def setup_pointer_circle(caller: Component) -> Component:
     """Helper to set up a PointerCircle context for pattern tests."""
     caller.assert_spawn_order(True)
-    caller.pointer.SetPointerCircle(0, lib.circle1, location=100)
+    caller.pointer.SetPointerCircle(0, location=100, follow=False)
     return caller
 
 P = enums.Properties
@@ -787,7 +787,7 @@ class TestInstantPatternSpawnOrderRequirement:
         with pytest.raises(RuntimeError) as exc:
             caller.instant.Arc(
                 time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=5, spacing=30
+                numBullets=5, angle=150
             )
         assert_error(exc, "requires an active PointerCircle")
 
@@ -804,7 +804,7 @@ class TestInstantPatternSpawnOrderRequirement:
         with pytest.raises(RuntimeError) as exc:
             caller.instant.Radial(
                 time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=12
+                spacing=30
             )
         assert_error(exc, "requires an active PointerCircle")
 
@@ -826,8 +826,56 @@ class TestInstantPatternSpawnOrderRequirement:
 class TestInstantArcValidation:
     """Test Arc pattern validation - complex math that could break"""
 
-    def test_arc_odd_bullets_fractional_center_rejected(self):
-        """Odd bullets with fractional centerAt is rejected"""
+    def test_arc_odd_bullets_fractional_center_accepted(self):
+        """Odd bullets with fractional centerAt is now accepted (rounds to 1/3 degree)"""
+        comp = Component("Test", 100).assert_spawn_order(True)
+        comp.set_context(target=enums.EMPTY_BULLET)
+        comp.Toggle(0, activateGroup=True)
+        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
+        comp.Toggle(0, activateGroup=True)
+
+        caller = Component("Caller", 200)
+        setup_pointer_circle(caller)
+        # Should not raise - new system rounds to 1/3 degree precision
+        caller.instant.Arc(
+            time=0, comp=comp, bullet=lib.bullet1,
+            numBullets=5, angle=150, centerAt=45.5
+        )
+
+    def test_arc_even_bullets_any_center_accepted(self):
+        """Even bullets with any centerAt is now accepted (rounds to 1/3 degree)"""
+        comp = Component("Test", 100).assert_spawn_order(True)
+        comp.set_context(target=enums.EMPTY_BULLET)
+        comp.Toggle(0, activateGroup=True)
+        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
+        comp.Toggle(0, activateGroup=True)
+
+        caller = Component("Caller", 200)
+        setup_pointer_circle(caller)
+        # Should not raise - new system rounds to 1/3 degree precision
+        caller.instant.Arc(
+            time=0, comp=comp, bullet=lib.bullet1,
+            numBullets=4, angle=60, centerAt=0
+        )
+
+    def test_arc_fractional_center_accepted(self):
+        """Fractional centerAt is now accepted (rounds to 1/3 degree)"""
+        comp = Component("Test", 100).assert_spawn_order(True)
+        comp.set_context(target=enums.EMPTY_BULLET)
+        comp.Toggle(0, activateGroup=True)
+        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
+        comp.Toggle(0, activateGroup=True)
+
+        caller = Component("Caller", 200)
+        setup_pointer_circle(caller)
+        # Should not raise - new system rounds to 1/3 degree precision
+        caller.instant.Arc(
+            time=0, comp=comp, bullet=lib.bullet1,
+            numBullets=4, angle=120, centerAt=45.5
+        )
+
+    def test_arc_angle_zero_rejected(self):
+        """Angle of 0 is rejected"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -839,12 +887,12 @@ class TestInstantArcValidation:
         with pytest.raises(ValueError) as exc:
             caller.instant.Arc(
                 time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=5, spacing=30, centerAt=45.5
+                numBullets=5, angle=0
             )
-        assert_error(exc, "odd bullets requires integer centerAt")
+        assert_error(exc, "angle", "0", "360")
 
-    def test_arc_even_bullets_odd_spacing_integer_center_rejected(self):
-        """Even bullets with odd spacing requires .5 centerAt"""
+    def test_arc_angle_above_360_rejected(self):
+        """Angle above 360 is rejected"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -856,12 +904,12 @@ class TestInstantArcValidation:
         with pytest.raises(ValueError) as exc:
             caller.instant.Arc(
                 time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=4, spacing=15, centerAt=0
+                numBullets=1, angle=361
             )
-        assert_error(exc, "even", "odd spacing", ".5")
+        assert_error(exc, "angle", "360")
 
-    def test_arc_even_bullets_even_spacing_fractional_center_rejected(self):
-        """Even bullets with even spacing requires integer centerAt"""
+    def test_arc_valid_angle_accepted(self):
+        """Valid angle is accepted"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -870,15 +918,14 @@ class TestInstantArcValidation:
 
         caller = Component("Caller", 200)
         setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Arc(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=4, spacing=30, centerAt=45.5
-            )
-        assert_error(exc, "even bullets with even spacing requires integer centerAt")
+        # Should not raise - angle of 360 is valid
+        caller.instant.Arc(
+            time=0, comp=comp, bullet=lib.bullet1,
+            numBullets=10, angle=360
+        )
 
-    def test_arc_spacing_zero_rejected(self):
-        """Spacing below 1 is rejected"""
+    def test_arc_any_centerAt_accepted(self):
+        """Any centerAt value is accepted (rounds to 1/3 degree precision)"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -887,63 +934,11 @@ class TestInstantArcValidation:
 
         caller = Component("Caller", 200)
         setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Arc(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=5, spacing=0
-            )
-        assert_error(exc, "spacing", "1", "360", "0")
-
-    def test_arc_spacing_above_360_rejected(self):
-        """Spacing above 360 is rejected"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Arc(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=1, spacing=361
-            )
-        assert_error(exc, "spacing must be between 1 and 360")
-
-    def test_arc_exceeds_360_degrees_rejected(self):
-        """numBullets * spacing > 360 is rejected"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Arc(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=10, spacing=40  # 10 * 40 = 400 > 360
-            )
-        assert_error(exc, "exceeds 360")
-
-    def test_arc_center_at_invalid_fraction_rejected(self):
-        """centerAt must be integer or .5 increments"""
-        comp = Component("Test", 100).assert_spawn_order(True)
-        comp.set_context(target=enums.EMPTY_BULLET)
-        comp.Toggle(0, activateGroup=True)
-        comp.set_context(target=enums.EMPTY_TARGET_GROUP)
-        comp.Toggle(0, activateGroup=True)
-
-        caller = Component("Caller", 200)
-        setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Arc(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=5, spacing=30, centerAt=45.3, _radialBypass=True  # bypass arc logic to hit generic check
-            )
-        assert_error(exc, "centerAt must be an integer or integer.5")
+        # Should not raise - new system rounds to 1/3 degree precision
+        caller.instant.Arc(
+            time=0, comp=comp, bullet=lib.bullet1,
+            numBullets=5, angle=150, centerAt=45.3, _radialBypass=True
+        )
 
 
 # ============================================================================
@@ -986,8 +981,8 @@ class TestInstantRadialValidation:
             )
         assert_error(exc, "don't match")
 
-    def test_radial_non_factor_of_360_spacing_rejected(self):
-        """Spacing must be a factor of 360"""
+    def test_radial_any_spacing_accepted(self):
+        """Any spacing value is accepted (rounds to 1/3 degree precision)"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -996,15 +991,14 @@ class TestInstantRadialValidation:
 
         caller = Component("Caller", 200)
         setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Radial(
-                time=0, comp=comp, bullet=lib.bullet1,
-                spacing=7  # 7 is not a factor of 360
-            )
-        assert_error(exc, "factor of 360", "7")
+        # Should not raise - new system rounds to 1/3 degree precision
+        caller.instant.Radial(
+            time=0, comp=comp, bullet=lib.bullet1,
+            spacing=7  # 7 is not a factor of 360, but that's OK now
+        )
 
-    def test_radial_non_factor_of_360_numbullets_rejected(self):
-        """numBullets must be a factor of 360"""
+    def test_radial_any_numbullets_accepted(self):
+        """Any numBullets value is accepted (rounds to 1/3 degree precision)"""
         comp = Component("Test", 100).assert_spawn_order(True)
         comp.set_context(target=enums.EMPTY_BULLET)
         comp.Toggle(0, activateGroup=True)
@@ -1013,12 +1007,11 @@ class TestInstantRadialValidation:
 
         caller = Component("Caller", 200)
         setup_pointer_circle(caller)
-        with pytest.raises(ValueError) as exc:
-            caller.instant.Radial(
-                time=0, comp=comp, bullet=lib.bullet1,
-                numBullets=7  # 7 is not a factor of 360
-            )
-        assert_error(exc, "factor of 360")
+        # Should not raise - new system rounds to 1/3 degree precision
+        caller.instant.Radial(
+            time=0, comp=comp, bullet=lib.bullet1,
+            numBullets=7  # 7 is not a factor of 360, but that's OK now
+        )
 
 
 # ============================================================================
@@ -1779,3 +1772,188 @@ class TestToleranceBoundaryEdgeCases:
             lib._enforce_spawn_limit([caller, target])
 
         assert_error(exc_info, "case 1", "2 simultaneous")
+
+
+# ============================================================================
+# SOLID GROUP ENFORCEMENT
+# ============================================================================
+
+class TestSolidGroupEnforcement:
+    """Test solid group enforcement to prevent position groups from being used as spawnable groups"""
+
+    def setup_method(self):
+        """Clear solid groups and components before each test"""
+        lib.solid_groups_to_enforce.clear()
+        lib.all_components.clear()
+
+    def test_solid_group_as_component_caller_rejected(self):
+        """A solid group used as a component caller should raise ValueError"""
+        comp = Component("BadComponent", callerGroup=100)
+        lib.all_components.append(comp)
+        
+        with pytest.raises(ValueError) as exc:
+            lib._validate_solid_groups(100)
+        
+        assert_error(exc, "100", "component caller", "BadComponent")
+
+    def test_solid_group_in_context_groups_rejected(self):
+        """A solid group added via set_context(groups=...) should raise ValueError"""
+        comp = Component("BadComponent", callerGroup=50)
+        comp.set_context(groups=100)
+        lib.all_components.append(comp)
+        
+        with pytest.raises(ValueError) as exc:
+            lib._validate_solid_groups(100)
+        
+        assert_error(exc, "100", "component caller")
+
+    def test_different_group_as_component_caller_allowed(self):
+        """A different group as component caller is fine"""
+        comp = Component("GoodComponent", callerGroup=100)
+        lib.all_components.append(comp)
+        
+        # Should not raise - 200 is not the caller
+        lib._validate_solid_groups(200)
+
+    def test_solid_group_as_move_target_allowed(self):
+        """A solid group as Move target (via set_context) is allowed"""
+        comp = Component("GoodComponent", callerGroup=50)
+        comp.set_context(target=100)
+        comp.MoveBy(0, dx=10, dy=10, t=1)
+        lib.all_components.append(comp)
+        
+        # Should not raise - 100 is the target, not in groups array
+        lib._validate_solid_groups(100)
+
+    def test_keyframe_obj_trigger_exempt(self):
+        """KeyframeObj triggers are exempt from solid group validation"""
+        comp = Component("ScaleComponent", callerGroup=50)
+        comp.set_context(target=100)
+        comp.Scale(0, factor=2.0, t=1.0, hold=0.5)
+        lib.all_components.append(comp)
+        
+        # Should not raise even though KEYFRAME_OBJ might reference group 100
+        lib._validate_solid_groups(100)
+
+    def test_pointer_obj_trigger_exempt(self):
+        """PointerObj triggers are exempt from solid group validation"""
+        comp = Component("PointerComponent", callerGroup=50)
+        comp.set_context(target=100)
+        trigger = comp.create_trigger(enums.ObjectID.POINTER_OBJ, x=0, target=100)
+        trigger[enums.Properties.GROUPS] = [100]
+        lib.all_components.append(comp)
+        
+        # Should not raise because POINTER_OBJ is in solid_obj_ids exemption set
+        lib._validate_solid_groups(100)
+
+    def test_move_towards_enforces_target_as_solid(self):
+        """MoveTowards calls enforce_solid_groups on its target"""
+        lib.solid_groups_to_enforce.clear()
+        comp = Component("Bullet", callerGroup=500)
+        comp.set_context(target=600)
+        comp.MoveTowards(0, targetDir=90, t=1.0, dist=100)
+        
+        assert 600 in lib.solid_groups_to_enforce
+
+    def test_goto_group_enforces_target_as_solid(self):
+        """GotoGroup calls enforce_solid_groups on its target"""
+        lib.solid_groups_to_enforce.clear()
+        comp = Component("Bullet", callerGroup=500)
+        comp.set_context(target=600)
+        comp.GotoGroup(0, location=700, t=1.0)
+        
+        assert 600 in lib.solid_groups_to_enforce
+
+    def test_point_to_group_enforces_targetdir_as_solid(self):
+        """PointToGroup calls enforce_solid_groups on targetDir"""
+        lib.solid_groups_to_enforce.clear()
+        comp = Component("Bullet", callerGroup=500)
+        comp.set_context(target=600)
+        comp.PointToGroup(0, targetDir=700, t=1.0)
+        
+        assert 700 in lib.solid_groups_to_enforce
+
+    def test_scale_enforces_target_as_solid(self):
+        """Scale calls enforce_solid_groups on its target"""
+        lib.solid_groups_to_enforce.clear()
+        comp = Component("Bullet", callerGroup=500)
+        comp.set_context(target=600)
+        comp.Scale(0, factor=2.0, t=1.0, hold=0.5)
+        
+        assert 600 in lib.solid_groups_to_enforce
+
+    def test_complex_scene_conflict_detected(self):
+        """Test validation with multiple components - conflict should be detected"""
+        bullet = Component("Bullet", callerGroup=500)
+        bullet.set_context(target=600)
+        bullet.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
+        lib.all_components.append(bullet)
+        
+        emitter = Component("Emitter", callerGroup=501)
+        emitter.set_context(target=700)
+        emitter.GotoGroup(0, location=2000, t=1.0)
+        lib.all_components.append(emitter)
+        
+        # Bad component - uses 600 as caller (which is also bullet's solid target)
+        bad = Component("BadPattern", callerGroup=600)
+        bad.set_context(target=999)
+        bad.Toggle(0, activateGroup=True)
+        lib.all_components.append(bad)
+        
+        with pytest.raises(ValueError) as exc:
+            lib._validate_solid_groups()
+        
+        assert_error(exc, "600", "BadPattern")
+
+    def test_valid_scene_with_separate_groups(self):
+        """Test that properly separated solid and trigger groups validate successfully"""
+        bullet = Component("Bullet", callerGroup=500)
+        bullet.set_context(target=600)
+        bullet.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
+        lib.all_components.append(bullet)
+        
+        pattern = Component("Pattern", callerGroup=501)
+        pattern.Spawn(0, target=2000, spawnOrdered=False)
+        lib.all_components.append(pattern)
+        
+        # Should not raise - groups are properly separated
+        lib._validate_solid_groups()
+
+    def test_multiple_components_same_solid_group_allowed(self):
+        """Multiple components can use the same solid group as target"""
+        bullet1 = Component("Bullet1", callerGroup=500)
+        bullet1.set_context(target=600)
+        bullet1.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
+        lib.all_components.append(bullet1)
+        
+        bullet2 = Component("Bullet2", callerGroup=501)
+        bullet2.set_context(target=601)
+        bullet2.MoveTowards(0, targetDir=1000, t=1.0, dist=100)
+        lib.all_components.append(bullet2)
+        
+        # Both use 1000 as targetDir - should be fine
+        lib._validate_solid_groups()
+
+    def test_empty_enforcement_set_passes(self):
+        """Validating with empty enforcement set should pass"""
+        comp = Component("Component", callerGroup=100)
+        comp.Spawn(0, target=200, spawnOrdered=False)
+        lib.all_components.append(comp)
+        
+        lib._validate_solid_groups()
+
+    def test_specific_groups_parameter(self):
+        """Test _validate_solid_groups with specific groups parameter"""
+        comp = Component("Component", callerGroup=100)
+        comp.set_context(target=200)
+        comp.Toggle(0, activateGroup=True)
+        lib.all_components.append(comp)
+        
+        lib.solid_groups_to_enforce.add(100)
+        
+        # Calling with specific group 200 should pass (100 is bad but not checked)
+        lib._validate_solid_groups(200)
+        
+        # Calling with specific group 100 should fail
+        with pytest.raises(ValueError):
+            lib._validate_solid_groups(100)

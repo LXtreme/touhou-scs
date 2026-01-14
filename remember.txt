@@ -44,6 +44,10 @@ TODO:
 
 - Minor Optimization: Cache 'enforce_solid_groups' if used multiple times for the same groups
 
+- Optimization: set explicit 'follow rotate' and 'follow' instead of assuming both, to cut down on triggers.
+
+- Make PointerCircle have tighter setup timings (currently takes multiple ticks instead of ~3)
+
 - Add basic Bombing (keybind + texture)
 
 - Add rounding to 6 significant digits to trigger spread 

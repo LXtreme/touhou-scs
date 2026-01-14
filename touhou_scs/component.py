@@ -133,6 +133,8 @@ def enforce_solid_groups(*groups: int):
     """Mark groups as solid (objects). Validation deferred until export."""
     for g in groups:
         lib.solid_groups_to_enforce.add(g)
+    # Uncomment if needed:
+    # lib._validate_solid_groups(*groups) #type: ignore
 
 
 class Component:
@@ -313,10 +315,10 @@ class Component:
         self.triggers.append(trigger)
         return self
 
-    def Pulse(self, time: float,
-        hsb: lib.HSB, *, exclusive: bool = False,
-        fadeIn: float = 0, t: float = 0, fadeOut: float = 0):
+    def Pulse(self, time: float, hsb: lib.HSB, *, 
+        exclusive: bool = False, fadeIn: float = 0, t: float = 0, fadeOut: float = 0):
         validate_params(non_negative=[fadeIn, t, fadeOut], targets=self.target)
+        enforce_solid_groups(self.target)
 
         trigger = self.create_trigger(enum.ObjectID.PULSE, util.time_to_dist(time), self.target)
 
@@ -332,10 +334,10 @@ class Component:
         self.triggers.append(trigger)
         return self
 
-    def MoveBy(self, time: float, *,
-        dx: float, dy: float,
+    def MoveBy(self, time: float, *, dx: float, dy: float,
         t: float = 0, type: int = 0, rate: float = 1.0):
         validate_params(targets=self.target, non_negative=t, type=type, rate=rate)
+        enforce_solid_groups(self.target)
 
         trigger = self.create_trigger(enum.ObjectID.MOVE, util.time_to_dist(time), self.target)
 
@@ -354,7 +356,7 @@ class Component:
     def GotoGroup(self, time: float, location: int, *,
         t: float = 0, type: int = 0, rate: float = 1.0):
         validate_params(targets=[self.target, location], non_negative=t, type=type, rate=rate)
-        enforce_solid_groups(self.target)
+        enforce_solid_groups(self.target, location)
 
         trigger = self.create_trigger(enum.ObjectID.MOVE, util.time_to_dist(time), self.target)
 
@@ -383,13 +385,12 @@ class Component:
         self.MoveBy(time * enum.TICK*2, dx=x, dy=y)
         return self
 
-    def Rotate(self, time: float, *,
-        angle: float,
-        center: int | None = None,
+    def Rotate(self, time: float, *, angle: float, center: int | None = None,
         t: float = 0, type: int = 0, rate: float = 1.0):
         """Rotate target by angle (degrees, clockwise is positive)"""
         if center is None: center = self.target
         validate_params(targets=[self.target, center], non_negative=t, type=type, rate=rate)
+        enforce_solid_groups(self.target)
 
         trigger = self.create_trigger(enum.ObjectID.ROTATE, util.time_to_dist(time), self.target)
 
@@ -402,12 +403,11 @@ class Component:
         self.triggers.append(trigger)
         return self
 
-    def PointToGroup(self, time: float,
-        targetDir: int, *,
+    def PointToGroup(self, time: float, targetDir: int, *,
         t: float = 0, type: int = 0, rate: float = 1.0, dynamic: bool = False):
         """Point target towards another group"""
         validate_params(targets=self.target, non_negative=t, type=type, rate=rate)
-        enforce_solid_groups(targetDir)
+        enforce_solid_groups(self.target, targetDir)
 
         trigger = self.create_trigger(enum.ObjectID.ROTATE, util.time_to_dist(time), self.target)
 
@@ -439,6 +439,7 @@ class Component:
         Optional: t, hold, type, rate, reverse
         """
         validate_params(targets=self.target, factor=factor, non_negative=[t, hold], type=type, rate=rate)
+        enforce_solid_groups(self.target)
 
         if hold and reverse:
             warn("Scale: 'hold' time is ignored in reverse mode: "
@@ -502,6 +503,7 @@ class Component:
         t: float = 0, x_mod: float = 1.0, y_mod: float = 1.0):
         """Make target follow another group's movement"""
         validate_params(targets=self.target, non_negative=t)
+        enforce_solid_groups(self.target, targetDir)
 
         trigger = self.create_trigger(enum.ObjectID.FOLLOW, util.time_to_dist(time), self.target)
 
@@ -516,6 +518,7 @@ class Component:
     def Alpha(self, time: float, *, opacity: float, t: float = 0):
         """Change target's opacity from a range of 0-100 over time."""
         validate_params(targets=self.target, non_negative=t)
+        enforce_solid_groups(self.target)
         if not (0 <= opacity <= 100):
             raise ValueError("Opacity must be between 0 and 100")
 
@@ -703,6 +706,18 @@ class Multitarget:
             remap.pair(enum.EMPTY_MULTITARGET, comp.caller)
             caller.Spawn(time, mt_comp.caller, False,
                 remap=remap.build(), reset_remap=False)
+    
+    class Template:
+        _goto_comp_storage: Component | None = None
+        @classmethod
+        def goto(cls) -> Component:
+            if cls._goto_comp_storage is None:
+                cls._goto_comp_storage = Component("PointerCleanup_Goto", unknown_g(), 5)
+                with cls._goto_comp_storage.temp_context(target=enum.EMPTY_BULLET):
+                    cls._goto_comp_storage \
+                        .assert_spawn_order(False) \
+                        .GotoGroup(0, enum.EMPTY_TARGET_GROUP)
+            return cls._goto_comp_storage
 
 
 # ===========================================================
@@ -715,88 +730,55 @@ class Multitarget:
 # Batches smaller than this are processed manually to avoid edge case bugs
 _MULTITARGET_THRESHOLD = 8
 
-class _PointerCleanup:
-    follow_comps: dict[float, Component] = {}
-    _goto_comp_storage: Component | None = None
-    
-    @classmethod
-    def get_goto_comp(cls) -> Component:
-        if cls._goto_comp_storage is None:
-            cls._goto_comp_storage = (Component("PointerCleanup_Goto", unknown_g(), 5)
-                .assert_spawn_order(False)
-                .set_context(target=enum.EMPTY_BULLET)
-                    .GotoGroup(0, enum.EMPTY_TARGET_GROUP, t=0)
-            )
-        return cls._goto_comp_storage
-    
-    @classmethod
-    def get_follow_comp(cls, duration: float) -> Component:
-        for c in cls.follow_comps.keys():
-            if abs(c - duration) < 0.09:
-                duration = c
-                break
-        
-        if duration not in cls.follow_comps:
-            comp = (Component(f"PointerCleanup_Follow_{duration}", unknown_g(), 5)
-                .assert_spawn_order(False)
-                .set_context(target=enum.EMPTY_BULLET)
-                    .Follow(0, enum.EMPTY_EMITTER, t=duration)
-            )
-            cls.follow_comps[duration] = comp
-        return cls.follow_comps[duration]
-
 class Pointer:
     def __init__(self, component: Component):
         self._component = component
-        self._params: Any = ()
-
-    @property
-    def center(self) -> int:
-        """Center of the active PointerCircle."""
-        if self._component.current_pc is None:
-            raise RuntimeError(f"Component '{self._component.name}' has no active pointer circle")
-        return self._component.current_pc.center
+        self._pc: lib.GuiderCircle | None = None
+        self._pc_start_time: float | None = None
     
-    def point(self) -> int:
-        """First pointer of the active PointerCircle."""
-        if self._component.current_pc is None:
-            raise RuntimeError(f"Component '{self._component.name}' has no active pointer circle")
-        return self._component.current_pc.point
+    @property
+    def pc(self) -> lib.GuiderCircle:
+        if self._pc is None:
+            raise RuntimeError(f"Component '{self._component.name}': No active PointerCircle")
+        return self._pc
 
-    def SetPointerCircle(self, time: float, *, location: int, duration: float = 0, set_north: bool = True):
-        if self._component.current_pc is not None:
-            raise RuntimeError("Pointer.SetPointerCircle: A PointerCircle is already active")
-        if duration < 0:
-            raise ValueError("Pointer.SetPointerCircle: duration cannot be negative")
-        
-        pc = lib.GuiderCircle(point=0, center=0)
-        self._component.current_pc = pc
-        self._params = (time, duration)
-        
+    def SetPointerCircle(self, time: float, *, location: int, follow: bool, set_north: bool = True):
+        if self._pc is not None:
+            raise RuntimeError(f"Component '{self._component.name}': PointerCircle already active")
+
+        if follow:
+            pc = lib.GuiderCircle(point=0, center=0, all_group=unknown_g())
+        else:
+            pc = lib.GuiderCircle(point=0, center=0, all_group=0)
+
+        # Expanded timing to avoid race conditions with multitarget spawning:
+        # - Setup happens earlier (time - TICK*4 to time - TICK*2)
+        # - This gives room for CleanPointerCircle to run at time
+        # - Circle is ready by time (1 tick after call, as required)
         with self._component.temp_context(target=lib.circle1.all):
-            self._component.GotoGroup(time - enum.TICK*2, location)
+            self._component.GotoGroup(time - enum.TICK*4, location)
             if set_north:
-                self._component.PointToGroup(time - enum.TICK, enum.NORTH_GROUP)
+                self._component.PointToGroup(time - enum.TICK*3, enum.NORTH_GROUP)
         with self._component.temp_context(target=pc.center):
-            self._component.GotoGroup(time, lib.circle1.center)
-        
+            self._component.GotoGroup(time - enum.TICK*2, lib.circle1.center)
+
+        self._pc = pc
+        self._pc_start_time = time
         return self._component
 
     def CleanPointerCircle(self):
         """Remove active Pointer-based GuiderCircle"""
-        if self._component.current_pc is None:
-            raise RuntimeError("Pointer.CleanPointerCircle: No active PointerCircle to clean")
-        
-        time, duration = self._params
-        pc = self._component.current_pc
+
         c1 = lib.circle1
-        
+        pc = self.pc
+        time = self._pc_start_time
+        assert time is not None
+
         used_pointers = [(g, c1.groups[i]) for i, g in enumerate(pc.groups) if g != -1]
-        
-        # === PHASE 1: Move pointers to circle1 positions (GotoGroup) ===
+        if pc.all != 0:
+            lib.pointer.register_set(pc.all, [g for g, _ in used_pointers] + [pc.center])
+
         pair_iter = iter(used_pointers)
-        goto_comp = _PointerCleanup.get_goto_comp()
-        
         def remap_goto(remap_pairs: dict[int, int], remap: util.Remap):
             pc_pointer, c1_pointer = next(pair_iter)
             for source, target in remap_pairs.items():
@@ -806,56 +788,25 @@ class Pointer:
                     remap.pair(target, c1_pointer)
                 else:
                     remap.pair(target, enum.EMPTY_MULTITARGET)
-        
+
         remaining = len(used_pointers)
+        goto_comp = Multitarget.Template.goto()
         while remaining > 0:
             batch_size = 64 if remaining > 127 else remaining
             
-            # Skip small batches - process manually instead
             if batch_size < _MULTITARGET_THRESHOLD:
+                # Manual: small batches to avoid multitarget edge case bugs
                 for _ in range(batch_size):
                     pc_pointer, c1_pointer = next(pair_iter)
                     with self._component.temp_context(target=pc_pointer):
-                        self._component.GotoGroup(time - enum.TICK, c1_pointer)
+                        self._component.GotoGroup(time, c1_pointer)
             else:
-                Multitarget.spawn_with_remap(self._component, time - enum.TICK, batch_size, goto_comp, remap_goto)
-            
+                Multitarget.spawn_with_remap(self._component, time, batch_size, goto_comp, remap_goto)
+
             remaining -= batch_size
-        
-        # === PHASE 2: Add follow behavior ===
-        if duration < 0:
-            self._component.current_pc = None
-            return self._component
-        
-        pair_iter = iter(used_pointers)
-        follow_comp = _PointerCleanup.get_follow_comp(duration)
-        
-        def remap_follow(remap_pairs: dict[int, int], remap: util.Remap):
-            pc_pointer, _ = next(pair_iter)
-            for source, target in remap_pairs.items():
-                if source == enum.EMPTY_BULLET:
-                    remap.pair(target, pc_pointer)
-                elif source == enum.EMPTY_EMITTER:
-                    remap.pair(target, pc.center)
-                else:
-                    remap.pair(target, enum.EMPTY_MULTITARGET)
-        
-        remaining = len(used_pointers)
-        while remaining > 0:
-            batch_size = 64 if remaining > 127 else remaining
-            
-            # Skip small batches - process manually instead
-            if batch_size < _MULTITARGET_THRESHOLD:
-                for _ in range(batch_size):
-                    pc_pointer, _ = next(pair_iter)
-                    with self._component.temp_context(target=pc_pointer):
-                        self._component.Follow(time, pc.center, t=duration)
-            else:
-                Multitarget.spawn_with_remap(self._component, time, batch_size, follow_comp, remap_follow)
-            
-            remaining -= batch_size
-        
-        self._component.current_pc = None
+
+        self._pc = None
+        self._pc_start_time = None
         return self._component
 
 
@@ -885,9 +836,7 @@ class InstantPatterns:
         if not (0 <= centerAt < 360):
             raise ValueError(f"{IA} centerAt must be between 0 (inclusive) and 360 (exclusive). Got: {centerAt}")
         
-        pc = self._component.current_pc
-        if pc is None:
-            raise RuntimeError(f"{IA} requires an active PointerCircle in the component.")
+        pc = self._component.pointer.pc
 
         startAngle = centerAt - angle / 2
         endAngle = centerAt + angle / 2
@@ -966,8 +915,9 @@ class InstantPatterns:
                 enum.EMPTY1, enum.EMPTY2 }
         )
 
-        if bullet.has_orientation and not comp.has_trigger_properties({ppt.ROTATE_AIM_MODE:Any}):
-            warn(f"{IL} Bullet has orientation enabled, but component has no PointToGroup trigger. Bullets may not face the correct direction.")
+        if bullet.has_orientation and not comp.has_trigger_properties({ ppt.ROTATE_AIM_MODE: Any }):
+            warn(f"{IL} Bullet has orientation enabled, but component has no PointToGroup trigger."
+                 f"Bullets may not face the correct direction.")
 
         if fastestTime >= slowestTime:
             raise ValueError(f"{IL} slowestTime {slowestTime} must be greater than fastestTime {fastestTime}")

@@ -22,14 +22,13 @@ from dataclasses import dataclass
 all_spells: list[SpellProtocol] = []
 all_components: list[ComponentProtocol] = []
 
-# Solid groups validation - deferred until export time
+# unfortunately has to be up here to avoid circular imports
 solid_groups_to_enforce: set[int] = set()
-
 def _validate_solid_groups(*specific_groups: int):
     """Ensures groups marked as solid are not component or trigger groups."""
     ppt = enum.Properties
     groups = specific_groups if specific_groups else solid_groups_to_enforce
-    
+
     for g in groups:
         for c in all_components:
             # Check if it's a non-solid group (i.e. if it belongs to a comp/trigger)
@@ -37,9 +36,12 @@ def _validate_solid_groups(*specific_groups: int):
                 raise ValueError(f"Group {g} is a component caller in '{c.name}', not a solid group")
             
             for t in c.triggers:
-                groups_in_trigger = t.get(ppt.GROUPS, [])
-                if g in groups_in_trigger:
-                    raise ValueError(f"Group {g} is a trigger group in '{c.name}', not a solid group")
+                if t[ppt.OBJ_ID] == enum.ObjectID.POINTER_OBJ: continue
+                
+                groups = t.get(ppt.GROUPS, [])
+                if g in groups:
+                    raise ValueError(f"Group {g} is a trigger group ({t[ppt.OBJ_ID]}) in '{c.name}', not a solid group")
+
 
 _start_time = time.time()
 
@@ -100,20 +102,20 @@ class GuiderCircle:
     """
     Circle of 1080 pointer objects for angle-based aiming (1/3 degree precision):
     - Circle1: Pre-allocated.
-    - Lazy (point == 0): Initializes with zeros, allocates on-demand via angle_to_groups
+    - Lazy (point == -1): Initializes with zeros, allocates on-demand via angle_to_groups
     """
     PRECISION = 1080
 
-    def __init__(self, center: int, point: int, all_group: int = 0):
+    def __init__(self, center: int, point: int, all_group: int):
         self.all = all_group
-        self.center = center if center != 0 else Pointer.next()
+        self.center = center if center != 0 else pointer.next()
         self.point = point  # direction that the guidercircle points
 
         if point != 0: # Circle1
             self.groups = [point + i for i in range(self.PRECISION)]
         else:
             self.groups = [-1] * self.PRECISION
-            self.groups[0] = Pointer.next()  # Allocate first pointer
+            self.groups[0] = pointer.next()  # Allocate first pointer
 
     def angle_to_groups(self, startAngle: float, endAngle: float, numPoints: int, closed_circle: bool = False):
         """
@@ -129,10 +131,8 @@ class GuiderCircle:
         arc_length = endAngle - startAngle
 
         if closed_circle:
-            # For closed circles (radials), distribute evenly without overlapping start/end
             spacing = arc_length / numPoints
         else:
-            # For arcs, include both endpoints
             spacing = arc_length / (numPoints - 1)
 
         original_angles = [startAngle + (spacing * i) for i in range(numPoints)]
@@ -141,9 +141,8 @@ class GuiderCircle:
         for orig_angle in original_angles:
             index = round(orig_angle * points_per_degree) % self.PRECISION
 
-            # Lazy allocation: if groups[index] is -1, allocate a new pointer
-            if self.groups[index] == -1:
-                self.groups[index] = Pointer.next()
+            if self.groups[index] == -1: # Lazy allocation
+                self.groups[index] = pointer.next()
 
             groups.append(self.groups[index])
 
@@ -194,11 +193,7 @@ bullet2 = BulletPool(1501, 2200, True)
 bullet3 = BulletPool(2901, 3600, False)
 bullet4 = BulletPool(4301, 4700, False)
 
-class Pointer:
-    """
-    Pointer object system using group registry for dynamic group assignments.
-    Exports actual pointer objects at save time.
-    """
+class pointer:
     obj_count = 100
     _DEBUG_UI_GROUP = 33
     pointer_comp = Component("Pointers", 0, 11).assert_spawn_order(False)
@@ -206,12 +201,10 @@ class Pointer:
     _pointer_iter = cycle(pointers)
     
     group_registry = { g: [g] for g in pointers }
-    for g in group_registry: 
-        group_registry[g].append(_DEBUG_UI_GROUP)
+    for g in group_registry: group_registry[g].append(_DEBUG_UI_GROUP)
     
     @classmethod
     def next(cls) -> int:
-        """Get next pointer group ID."""
         if cls.export_mappings.has_been_called:
             raise RuntimeError("Pointer.next() cannot be called after export_mappings()")
         return next(cls._pointer_iter)
@@ -232,19 +225,17 @@ class Pointer:
             raise RuntimeError("Pointer.export_mappings has already been called")
         ppt = enum.Properties
         for group_list in cls.group_registry.values():
+            # old pointer obj str: 1,3802,2,2625,3,915,20,2,57,7000.33,64,1,67,1,155,14905,25,9,24,11,128,0.25,129,0.25;
             cls.pointer_comp.triggers.append({ #type: ignore
                 ppt.OBJ_ID: enum.ObjectID.POINTER_OBJ,
-                ppt.X: 0.0, 
-                ppt.Y: 0.0,
+                ppt.X: 0.0, ppt.Y: 0.0,
                 ppt.GROUPS: group_list,
                 ppt.EDITOR_LAYER: 11,
-                ppt.SCALE: 0.2,
-                "24": 9,  # Z layer
-                "64": True,  # dont fade
-                "67": True,  # dont enter
+                ppt.SCALE: 0.2, #type: ignore
+                "24": 9, # Z layer
+                "64": True, # dont fade
+                "67": True, # dont enter
             })
-
-pointer = Pointer  # Keep old name for compatibility but use new system
 
 reimuA_level1 = BulletPool(110, 128, True)
 
@@ -543,7 +534,6 @@ def _spread_triggers(triggers: list[Trigger], comp: ComponentProtocol, trigger_a
             break
 
     if has_pointer_objs:
-        # Pointer objects: spread them randomly
         for pointer_obj in triggers:
             pointer_obj[ppt.X] = random.randint(min_x, max_x)
             pointer_obj[ppt.Y] = random.randint(min_y, max_y)
@@ -681,10 +671,10 @@ def save_all(*,
 
     output: dict[str, list[Trigger]] = {"triggers": []}
 
-    ppt = enum.Properties # shorthand
+    ppt = enum.Properties # shorthand (also technically faster lol)
     
     _validate_solid_groups()
-    Pointer.export_mappings()
+    pointer.export_mappings()
 
     for comp in all_components:
         if comp.current_pc is not None:
