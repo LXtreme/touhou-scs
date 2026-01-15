@@ -1,3 +1,4 @@
+previews/*.gif
 .pytest_cache/
 __pycache__/
 debug/__pycache__/

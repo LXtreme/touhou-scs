@@ -1,40 +1,295 @@
 # pyright: reportUnknownMemberType=false
 # pyright: reportUnknownVariableType=false
-"""Bezier curve movement system with auto-generated curve parameters."""
+"""
+Bezier curve movement system for smooth, speed-consistent object motion.
+
+SYSTEM OVERVIEW:
+    1. Define cubic Bezier curves with 4 control points (p0, p1, p2, p3)
+    2. Optimization splits curve into 2 piecewise segments with ease-in/ease-out
+    3. Each segment is fit with polynomial approximations for Y motion
+    4. Parameters are stored in CURVE_PARAMS dict and CurveType enum (auto-generated)
+    5. At runtime, apply_bezier_movement() generates multiple MoveBy triggers
+    6. Optional: Generate animated GIF previews for visual debugging
+
+FILE ORGANIZATION (~850 lines in logical sections):
+    - Configuration & Constants       ← QUALITY_PRESETS, ranges, etc.
+    - Type Definitions                ← TypedDict for CURVE_PARAMS structure
+    - Core Math Functions             ← ease_in, ease_out, curve fitting
+    - Curve Fitting & Optimization    ← Random search optimization
+    - Auto-Generated Registry         ← CurveType enum + CURVE_PARAMS dict
+    - Registration System             ← register_bezier_curve() + self-modifying code
+    - Runtime Application             ← apply_bezier_movement() used by Component
+    - Preview Generation (Optional)   ← matplotlib GIF generation (lazy import)
+
+SETUP:
+    python setup_curves.py          # Register all common curves (one-time setup)
+    python generate_all_previews.py # Generate GIFs for all curves (optional)
+
+USAGE:
+    from touhou_scs.movements import CurveType
+    component.timed.BezierMove(0.5, CurveType.BOSS_CHARGE, dx=100, dy=-50, t=3.0)
+    
+DEVELOPER EXPERIENCE NOTE:
+    The auto-generated CurveType enum provides autocomplete and type safety.
+    Yes, the code modifies itself - this is intentional for DX! :)
+"""
 
 from __future__ import annotations
-from typing import Union, TYPE_CHECKING, TypedDict, List, Any
+from typing import Union, TYPE_CHECKING, List, Any, Callable, Optional, Tuple, TypedDict
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+import random
 import numpy as np
-
-from touhou_scs.curve_optimizer import optimize_6_trigger_profile
+from multiprocessing import Pool, cpu_count
+from touhou_scs import enums as e
 
 if TYPE_CHECKING: from touhou_scs.component import Component
 
-class BezierPoints(TypedDict):
-    p0: List[float]
-    p1: List[float]
-    p2: List[float]
-    p3: List[float]
 
-class QualityInfo(TypedDict):
+# ============================================================================
+# CONFIGURATION & CONSTANTS
+# ============================================================================
+
+# Optimization settings
+OPTIMIZATION_SAMPLES = 200  # Sample points for curve fitting
+
+# Quality presets define optimization iterations, polynomial complexity, and trigger count
+QUALITY_PRESETS: dict[str, dict[str, Any]] = {
+    "fast":   {"iters": 1000, "y_exps": [1.0, 2.0],             "triggers": 6},
+    "medium": {"iters": 1000, "y_exps": [1.0, 2.0, 3.0],        "triggers": 8},
+    "high":   {"iters": 4000, "y_exps": [1.0, 2.0, 3.0],        "triggers": 8},
+    "ultra":  {"iters": 4000, "y_exps": [1.0, 2.0, 3.0, 4.0],   "triggers": 10},
+}
+
+# Preview generation settings
+PREVIEW_FPS = 20
+PREVIEW_FRAMES = 120
+PREVIEW_SAMPLES = 100
+PREVIEW_PADDING = 0.15
+
+# Optimization search ranges
+SPLIT_TIME_RANGE = (0.3, 0.7)  # Where to split the curve (30%-70% of duration)
+SPLIT_DISTANCE_RANGE = (0.3, 0.7)  # Where to split X distance
+EASING_RATE_RANGE = (0.5, 10.0)  # Ease-in/ease-out exponent range
+
+# ============================================================================
+# TYPE DEFINITIONS
+# ============================================================================
+
+Point = tuple[float | int, float | int]
+
+
+class BezierPointsDict(TypedDict):
+    p0: list[float]
+    p1: list[float]
+    p2: list[float]
+    p3: list[float]
+
+
+class QualityInfoDict(TypedDict):
     max_speed_dev: float
     rms_speed_dev: float
     score: float
     quality_preset: str
     trigger_count: int
 
-class CurveParams(TypedDict):
+
+class CurveParamsDict(TypedDict):
     t_split: float
     x_split: float
     r_in: float
     r_out: float
-    y_coeffs_1: List[float]
-    y_coeffs_2: List[float]
-    y_exps: List[float]
-    bezier_points: BezierPoints
-    quality_info: QualityInfo
+    y_coeffs_1: list[float]
+    y_coeffs_2: list[float]
+    y_exps: list[float]
+    bezier_points: BezierPointsDict
+    quality_info: QualityInfoDict
+
+
+@dataclass
+class OptimizationResult:
+    t_split: float
+    x_split: float
+    r_in: float
+    r_out: float
+    score: float = 1e18
+    max_speed_dev: float = 1e18
+    rms_speed_dev: float = 1e18
+    y_coeffs_1: Optional[np.ndarray] = None
+    y_coeffs_2: Optional[np.ndarray] = None
+
+
+# ============================================================================
+# CORE MATH FUNCTIONS
+# ============================================================================
+
+
+def ease_in(t: np.ndarray, rate: float) -> np.ndarray:
+    return t**rate
+
+
+def ease_out(t: np.ndarray, rate: float) -> np.ndarray:
+    return 1.0 - (1.0 - t) ** rate
+
+
+def fit_polynomial_least_squares(
+    t: np.ndarray, y: np.ndarray, exponents: List[float]
+) -> np.ndarray:
+    """Fit y(t) = sum(c_i * t^exp_i) using least squares. No constant term."""
+    A = np.vstack([t**exp for exp in exponents]).T
+    coeffs, *_ = np.linalg.lstsq(A, y, rcond=None)
+    return coeffs
+
+
+def compute_speed_profile(positions: np.ndarray, dt: float) -> np.ndarray:
+    """Calculate instantaneous speed from position samples."""
+    dx = np.diff(positions[:, 0])
+    dy = np.diff(positions[:, 1])
+    distances = np.sqrt(dx**2 + dy**2)
+    speeds = distances / dt
+    return speeds
+
+
+def score_speed_consistency(speeds: np.ndarray) -> Tuple[float, float, float]:
+    """Returns (score, max_deviation, rms_deviation). Lower is better."""
+    if len(speeds) == 0:
+        return 1e18, 1e18, 1e18
+
+    mean_speed = np.mean(speeds)
+    fractional_deviation = (speeds / mean_speed) - 1.0
+
+    max_dev = float(np.max(np.abs(fractional_deviation)))
+    rms_dev = float(np.sqrt(np.mean(fractional_deviation**2)))
+
+    score = 2.0 * max_dev + 1.0 * rms_dev  # Weight max deviation more heavily
+    return score, max_dev, rms_dev
+
+
+# ============================================================================
+# CURVE FITTING & OPTIMIZATION
+# ============================================================================
+#
+# WHY 2-SEGMENT PIECEWISE APPROACH?
+# 
+# Problem: Bezier curves don't have constant speed - objects accelerate/decelerate
+# along the curve, causing jerky motion in GD.
+#
+# Solution: Split the curve into 2 segments with:
+#   - Segment 1: Ease-in X motion + polynomial Y motion (0% to split%)
+#   - Segment 2: Ease-out X motion + polynomial Y motion (split% to 100%)
+#
+# This gives us enough control points to approximate the Bezier curve while
+# maintaining relatively constant speed. The optimization finds the best:
+#   - Split point (where to divide the curve)
+#   - Easing rates (how aggressive the ease-in/out should be)
+#   - Polynomial coefficients (how Y changes over time)
+#
+# Result: Smooth curves with <50% speed deviation (most <25%)
+# ============================================================================
+
+
+def fit_and_evaluate_curve(
+    bezier_func: Callable[[np.ndarray], np.ndarray],
+    x0: float,
+    x1: float,
+    total_duration: float,
+    params: OptimizationResult,
+    y_exponents: List[float],
+) -> OptimizationResult:
+    """Fit 2-segment piecewise curve and score speed consistency."""
+    duration_seg1 = total_duration * params.t_split
+    duration_seg2 = total_duration * (1 - params.t_split)
+    x_mid = x0 + (x1 - x0) * params.x_split
+
+    # Segment 1: Ease-in
+    tau1 = np.linspace(0, 1, OPTIMIZATION_SAMPLES)
+    x1_positions = x0 + (x_mid - x0) * ease_in(tau1, params.r_in)
+    y1_positions = bezier_func(x1_positions)
+    y1_start = bezier_func(np.array(x0))
+    dy1 = y1_positions - y1_start
+    coeffs1 = fit_polynomial_least_squares(tau1, dy1, y_exponents)
+
+    # Segment 2: Ease-out
+    tau2 = np.linspace(0, 1, OPTIMIZATION_SAMPLES)
+    x2_positions = x_mid + (x1 - x_mid) * ease_out(tau2, params.r_out)
+    y2_positions = bezier_func(x2_positions)
+    y2_start = bezier_func(np.array(x_mid))
+    dy2 = y2_positions - y2_start
+    coeffs2 = fit_polynomial_least_squares(tau2, dy2, y_exponents)
+
+    # Reconstruct full path
+    exps_arr = np.array(y_exponents)
+    x1_reconstructed = x0 + (x_mid - x0) * ease_in(tau1, params.r_in)
+    y1_reconstructed = y1_start + np.sum(
+        coeffs1[:, None] * (tau1[None, :] ** exps_arr[:, None]), axis=0
+    )
+    x2_reconstructed = x_mid + (x1 - x_mid) * ease_out(tau2, params.r_out)
+    y2_reconstructed = y2_start + np.sum(
+        coeffs2[:, None] * (tau2[None, :] ** exps_arr[:, None]), axis=0
+    )
+
+    positions_seg1 = np.column_stack([x1_reconstructed, y1_reconstructed])
+    positions_seg2 = np.column_stack([x2_reconstructed, y2_reconstructed])
+
+    # Compute speed profile
+    dt1 = duration_seg1 / (OPTIMIZATION_SAMPLES - 1)
+    dt2 = duration_seg2 / (OPTIMIZATION_SAMPLES - 1)
+    speeds1 = compute_speed_profile(positions_seg1, dt1)
+    speeds2 = compute_speed_profile(positions_seg2, dt2)
+    all_speeds = np.concatenate([speeds1, speeds2])
+    score, max_dev, rms_dev = score_speed_consistency(all_speeds)
+
+    params.score = score
+    params.max_speed_dev = max_dev
+    params.rms_speed_dev = rms_dev
+    params.y_coeffs_1 = coeffs1
+    params.y_coeffs_2 = coeffs2
+
+    return params
+
+
+def optimize_curve_parameters(
+    bezier_func: Callable[[np.ndarray], np.ndarray],
+    x0: float,
+    x1: float,
+    total_duration: float,
+    y_exponents: List[float],
+    iterations: int = 1000,
+    seed: int = 1,
+) -> OptimizationResult:
+    """Find optimal piecewise curve parameters using random search."""
+    random.seed(seed)
+
+    best = OptimizationResult(t_split=0.5, x_split=0.5, r_in=2.0, r_out=2.0)
+    best = fit_and_evaluate_curve(bezier_func, x0, x1, total_duration, best, y_exponents)
+
+    print(f"Optimizing with {iterations} iterations...")
+
+    for i in range(iterations):
+        if i % 500 == 0 and i > 0:
+            print(f"  Iteration {i}/{iterations}, best score: {best.score:.6f}")
+
+        candidate = OptimizationResult(
+            t_split=random.uniform(*SPLIT_TIME_RANGE),
+            x_split=random.uniform(*SPLIT_DISTANCE_RANGE),
+            r_in=random.uniform(*EASING_RATE_RANGE),
+            r_out=random.uniform(*EASING_RATE_RANGE),
+        )
+
+        candidate = fit_and_evaluate_curve(
+            bezier_func, x0, x1, total_duration, candidate, y_exponents
+        )
+
+        if candidate.score < best.score:
+            best = candidate
+
+    print(f"Optimization complete. Final score: {best.score:.6f}")
+    print(f"  Max speed deviation: {best.max_speed_dev:.4f} ({best.max_speed_dev*100:.2f}%)")
+    print(f"  RMS speed deviation: {best.rms_speed_dev:.4f} ({best.rms_speed_dev*100:.2f}%)")
+
+    return best
+
 
 # ============================================================================
 # AUTO-GENERATED SECTION - DO NOT EDIT BELOW THIS LINE
@@ -137,275 +392,104 @@ CURVE_PARAMS = {
 # END AUTO-GENERATED SECTION
 # ============================================================================
 
-CURVE_PARAMS: dict[str, Any] = CURVE_PARAMS  # type: ignore
+# Type annotation for the auto-generated CURVE_PARAMS
+CURVE_PARAMS: dict[str, CurveParamsDict]
 
-QUALITY_PRESETS: dict[str, dict[str, Any]] = {
-    "fast":   {"iters": 1000, "y_exps": [1.0, 2.0],          "triggers": 6},
-    "medium": {"iters": 1000, "y_exps": [1.0, 2.0, 3.0],     "triggers": 8},
-    "high":   {"iters": 4000, "y_exps": [1.0, 2.0, 3.0],     "triggers": 8},
-    "ultra":  {"iters": 4000, "y_exps": [1.0, 2.0, 3.0, 4.0], "triggers": 10},
-}
 
-Point = tuple[float, float]
+# ============================================================================
+# CURVE REGISTRATION
+# ============================================================================
 
-def register_bezier_curve(label: str, p0: Point, p1: Point, p2: Point, p3: Point,
-                          quality: str = "medium", force_recompute: bool = False):
-    """Register and optimize a cubic Bezier curve. Restart program to use CurveType enum."""
+
+def register_bezier_curve(
+    label: str,
+    p1: Point,
+    p2: Point,
+    p3: Point,
+    quality: str = "medium",
+    force_recompute: bool = False,
+):
+    """
+    Register a cubic Bezier curve for smooth movement patterns.
+    Requires program restart to use the new CurveType enum value
+    
+    Args:
+        label: Unique curve name (lowercase with underscores, e.g., "boss_charge")
+        quality: Optimization quality ("fast", "medium", "high", "ultra")
+                 Higher quality = more triggers, better speed consistency, slower optimization
+    """
+    p0: Point = (0, 0)
+
     if label in CURVE_PARAMS and not force_recompute:
         print(f"✓ Curve '{label}' already registered (use force_recompute=True to override)")
         return
-    
+
     if quality not in QUALITY_PRESETS:
-        raise ValueError(f"quality must be one of {list(QUALITY_PRESETS.keys())}, got '{quality}'")
-    
-    print(f"Optimizing curve '{label}' (quality={quality})...")
+        raise ValueError(
+            f"quality must be one of {list(QUALITY_PRESETS.keys())}, got '{quality}'"
+        )
+
+    print(f"\nOptimizing curve '{label}' (quality={quality})...")
     print(f"  Bezier control points: p0={p0}, p1={p1}, p2={p2}, p3={p3}")
-    
+
     def bezier_func(t: np.ndarray) -> np.ndarray:
+        """Cubic Bezier: B(t) = (1-t)³P₀ + 3(1-t)²tP₁ + 3(1-t)t²P₂ + t³P₃"""
         s = 1.0 - t
-        return s**3 * p0[1] + 3*s**2*t * p1[1] + 3*s*t**2 * p2[1] + t**3 * p3[1]
-    
+        return s**3 * p0[1] + 3 * s**2 * t * p1[1] + 3 * s * t**2 * p2[1] + t**3 * p3[1]
+
     settings = QUALITY_PRESETS[quality]
-    best = optimize_6_trigger_profile(
+    best = optimize_curve_parameters(
         bezier_func,
-        x0=0.0, x1=1.0, T=1.0,
-        y_exps=settings["y_exps"],
-        iters=settings["iters"],
-        samples=200,
-        rate_range=(0.5, 10.0)
+        x0=0.0,
+        x1=1.0,
+        total_duration=1.0,
+        y_exponents=settings["y_exps"],
+        iterations=settings["iters"],
     )
 
-    new_params: Any = {
+    new_params: CurveParamsDict = {
         "t_split": float(best.t_split),
         "x_split": float(best.x_split),
         "r_in": float(best.r_in),
         "r_out": float(best.r_out),
-        "y_coeffs_1": [float(c) for c in best.y_coeffs_1] if best.y_coeffs_1 is not None else [],
-        "y_coeffs_2": [float(c) for c in best.y_coeffs_2] if best.y_coeffs_2 is not None else [],
+        "y_coeffs_1": [float(c) for c in best.y_coeffs_1]
+        if best.y_coeffs_1 is not None
+        else [],
+        "y_coeffs_2": [float(c) for c in best.y_coeffs_2]
+        if best.y_coeffs_2 is not None
+        else [],
         "y_exps": settings["y_exps"],
         "bezier_points": {"p0": list(p0), "p1": list(p1), "p2": list(p2), "p3": list(p3)},
         "quality_info": {
-            "max_speed_dev": float(best.max_dev),
-            "rms_speed_dev": float(best.rms_dev),
+            "max_speed_dev": float(best.max_speed_dev),
+            "rms_speed_dev": float(best.rms_speed_dev),
             "score": float(best.score),
             "quality_preset": quality,
             "trigger_count": settings["triggers"],
-        }
+        },
     }
-    
+
     CURVE_PARAMS[label] = new_params  # type: ignore
-    _rewrite_self()
-    
-    print(f"✓ Curve '{label}' registered!")
-    print(f"  Max speed deviation: {best.max_dev*100:.2f}%")
-    print(f"  RMS speed deviation: {best.rms_dev*100:.2f}%")
+    _rewrite_curve_registry()
+
+    print(f"\n✓ Curve '{label}' registered successfully!")
+    print(f"  Max speed deviation: {best.max_speed_dev*100:.2f}%")
+    print(f"  RMS speed deviation: {best.rms_speed_dev*100:.2f}%")
     print(f"  Trigger count: {settings['triggers']}")
-    print(f"⚠️  Restart your program to use CurveType.{label.upper()} enum")
+    print(f"\n⚠️  Restart your program to use CurveType.{label.upper()} enum")
     print(f"   (or use string immediately: '{label}')")
 
 
-def apply_bezier_movement(component: Component,
-                          time: float,
-                          curve_label: Union[CurveType, str],
-                          dx: float,
-                          dy: float,
-                          duration: float,
-                          generate_preview: bool = False) -> Component:
-    """Apply Bezier curve movement (relative displacement). Use component.timed.BezierMove() instead."""
-    from touhou_scs import enums as e
-    if isinstance(curve_label, Enum):
-        label = curve_label.value
-    else:
-        label = curve_label
-    
-    if label not in CURVE_PARAMS:
-        available = list(CURVE_PARAMS.keys())
-        raise KeyError(
-            f"Curve '{label}' not registered!\n"
-            f"Available curves: {available}\n"
-            f"Register it with: register_bezier_curve('{label}', ...)"
-        )
-    
-    params = CURVE_PARAMS[label]
-    target = component.target
-    
-    if target == -1:
-        raise ValueError(
-            "No target set! Use component.set_context(target=...) or temp_context() first"
-        )
-
-    T1 = duration * params["t_split"]
-    dx1 = dx * params["x_split"]
-    
-    component.MoveBy(time, dx=dx1, dy=0, t=T1,
-                    type=e.Easing.EASE_IN, rate=float(params["r_in"]))
-    
-    for coef, exp in zip(params["y_coeffs_1"], params["y_exps"]):
-        dy_seg = dy * float(coef)
-        if abs(float(exp) - 1.0) < 1e-9:
-            easing = e.Easing.NONE
-            rate = 1.0
-        else:
-            easing = e.Easing.EASE_IN
-            rate = float(exp)
-        
-        component.MoveBy(time, dx=0, dy=dy_seg, t=T1,
-                        type=easing, rate=rate)
-
-    T2 = duration * (1 - params["t_split"])
-    dx2 = dx * (1 - params["x_split"])
-    
-    component.MoveBy(time, dx=dx2, dy=0, t=T2,
-                    type=e.Easing.EASE_OUT, rate=float(params["r_out"]))
-    
-    for coef, exp in zip(params["y_coeffs_2"], params["y_exps"]):
-        dy_seg = dy * float(coef)
-        if abs(float(exp) - 1.0) < 1e-9:
-            easing = e.Easing.NONE
-            rate = 1.0
-        else:
-            easing = e.Easing.EASE_IN
-            rate = float(exp)
-        
-        component.MoveBy(time, dx=0, dy=dy_seg, t=T2,
-                        type=easing, rate=rate)
-
-    if generate_preview:
-        _generate_movement_preview(label, params, dx, dy, duration)
-    
-    return component
-
-
-def _generate_movement_preview(curve_name: str, params: Any, dx: float, dy: float, duration: float) -> None:
-    """Generate animated GIF preview of the movement."""
-    try:
-        import numpy as np
-        import matplotlib
-        matplotlib.use('Agg')  # Use non-interactive backend
-        import matplotlib.pyplot as plt
-        from matplotlib.animation import FuncAnimation, PillowWriter
-        from pathlib import Path
-    except ImportError as e:
-        print("⚠️  Preview generation requires matplotlib. Install with: pip install matplotlib")
-        print(f"    Error: {e}")
-        return
-    
-    print(f"Generating preview for '{curve_name}' movement...")
-    T1 = duration * params["t_split"]
-    T2 = duration * (1 - params["t_split"])
-    dx1 = dx * params["x_split"]
-    dx2 = dx * (1 - params["x_split"])
-    
-    exps = np.array(params["y_exps"], dtype=float)
-    c1 = np.array(params["y_coeffs_1"], dtype=float)
-    c2 = np.array(params["y_coeffs_2"], dtype=float)
-    
-    def ease_in(t: np.ndarray, r: float) -> np.ndarray:
-        return t ** r
-    
-    def ease_out(t: np.ndarray, r: float) -> np.ndarray:
-        return 1.0 - (1.0 - t) ** r
-    
-    def position_at_time(t: float) -> tuple[float, float]:
-        if t <= T1:
-
-            tau = t / T1 if T1 > 0 else 0
-            x = dx1 * ease_in(np.array(tau), params["r_in"]).item()
-            y = np.sum(c1 * (tau ** exps)).item() * dy
-        else:
-
-            tau = (t - T1) / T2 if T2 > 0 else 0
-            x = dx1 + dx2 * ease_out(np.array(tau), params["r_out"]).item()
-            y = (np.sum(c1 * np.ones_like(exps)) + np.sum(c2 * (tau ** exps))).item() * dy
-        return x, y
-
-    samples = 200
-    times = np.linspace(0, duration, samples)
-    path = np.array([position_at_time(t) for t in times])
-
-    x_min, x_max = path[:, 0].min(), path[:, 0].max()
-    y_min, y_max = path[:, 1].min(), path[:, 1].max()
-
-    x_min = min(x_min, 0, dx)
-    x_max = max(x_max, 0, dx)
-    y_min = min(y_min, 0, dy)
-    y_max = max(y_max, 0, dy)
-
-    x_range = x_max - x_min
-    y_range = y_max - y_min
-    padding = 0.15
-    x_pad = x_range * padding if x_range > 0 else 10
-    y_pad = y_range * padding if y_range > 0 else 10
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.plot(path[:, 0], path[:, 1], 'b-', alpha=0.3, linewidth=2, label='Path')
-    ax.plot([0], [0], 'go', markersize=10, label='Start (0,0)')
-    ax.plot([dx], [dy], 'ro', markersize=10, label=f'End ({dx:.0f},{dy:.0f})')
-    
-    pt, = ax.plot([], [], 'bo', markersize=8)
-    trail, = ax.plot([], [], 'b-', alpha=0.6, linewidth=1)
-
-    bezier_pts = params.get("bezier_points", {})
-    if bezier_pts:
-        p0 = bezier_pts["p0"]
-        p1 = bezier_pts["p1"]
-        p2 = bezier_pts["p2"]
-        p3 = bezier_pts["p3"]
-
-        ctrl_x = [p0[0] * dx, p1[0] * dx, p2[0] * dx, p3[0] * dx]
-        ctrl_y = [p0[1] * dy, p1[1] * dy, p2[1] * dy, p3[1] * dy]
-        ax.plot(ctrl_x, ctrl_y, 'r--', alpha=0.3, linewidth=1, label='Bezier control')
-        ax.plot(ctrl_x, ctrl_y, 'rs', alpha=0.5, markersize=6)
-    
-    ax.set_xlabel('X Position (relative)')
-    ax.set_ylabel('Y Position (relative)')
-    ax.set_title(f'Bezier Movement: {curve_name}\ndx={dx}, dy={dy}, duration={duration}s')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-
-    ax.set_xlim(x_min - x_pad, x_max + x_pad)
-    ax.set_ylim(y_min - y_pad, y_max + y_pad)
-    
-    def init():
-        pt.set_data([], [])
-        trail.set_data([], [])
-        return pt, trail
-    
-    def update(frame: int) -> tuple[Any, Any]:
-        idx = int((frame / 100) * (samples - 1))
-        pt.set_data([path[idx, 0]], [path[idx, 1]])
-        trail.set_data(path[:idx+1, 0], path[:idx+1, 1])
-        return pt, trail
-    
-    try:
-        anim = FuncAnimation(fig, update, init_func=init, frames=100, interval=duration*10, blit=True)
-
-        output_dir = Path("previews")
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / f"{curve_name}_dx{int(dx)}_dy{int(dy)}.gif"
-        
-        writer = PillowWriter(fps=30)
-        anim.save(output_path, writer=writer)
-        
-        print(f"✓ Preview saved to: {output_path}")
-    except Exception as e:
-        print(f"⚠️  Failed to generate preview: {e}")
-    finally:
-        plt.close(fig)
-        plt.close('all')
-
-
-def _rewrite_self() -> None:
-    """Rewrite the auto-generated section."""
-    
+def _rewrite_curve_registry() -> None:
+    """Rewrite auto-generated section to keep CurveType enum in sync w/ self-writing python."""
     my_path = Path(__file__)
 
-    with open(my_path, 'r') as f:
+    with open(my_path, "r") as f:
         lines = f.readlines()
 
     start_marker = "# AUTO-GENERATED SECTION - DO NOT EDIT BELOW THIS LINE\n"
     end_marker = "# END AUTO-GENERATED SECTION\n"
-    
+
     try:
         start_idx = lines.index(start_marker)
         end_idx = lines.index(end_marker)
@@ -427,59 +511,300 @@ def _rewrite_self() -> None:
     for label in sorted(CURVE_PARAMS.keys()):
         p = CURVE_PARAMS[label]
         params_lines.append(f'    "{label}": {{\n')
-        params_lines.append(f'        "t_split": {p["t_split"]}, "x_split": {p["x_split"]}, "r_in": {p["r_in"]}, "r_out": {p["r_out"]},\n')
+        params_lines.append(
+            f'        "t_split": {p["t_split"]}, "x_split": {p["x_split"]}, '
+            f'"r_in": {p["r_in"]}, "r_out": {p["r_out"]},\n'
+        )
         params_lines.append(f'        "y_coeffs_1": {p["y_coeffs_1"]},\n')
         params_lines.append(f'        "y_coeffs_2": {p["y_coeffs_2"]},\n')
         params_lines.append(f'        "y_exps": {p["y_exps"]},\n')
         params_lines.append(f'        "bezier_points": {p["bezier_points"]},\n')
         params_lines.append(f'        "quality_info": {p["quality_info"]}\n')
-        params_lines.append('    },\n')
+        params_lines.append("    },\n")
     params_lines.append("}\n")
 
     new_lines = (
-        lines[:start_idx + 1] + ["\n"] +
-        enum_lines + ["\n"] +
-        params_lines + ["\n"] +
-        lines[end_idx:]
+        lines[: start_idx + 1]
+        + ["\n"]
+        + enum_lines
+        + ["\n"]
+        + params_lines
+        + ["\n"]
+        + lines[end_idx:]
     )
 
-    with open(my_path, 'w') as f:
+    with open(my_path, "w") as f:
         f.writelines(new_lines)
 
 
-# --- Convenience Functions ---
+# ============================================================================
+# CURVE APPLICATION (Runtime)
+# ============================================================================
+
+def apply_bezier_movement(
+    component: Component,
+    time: float,
+    curve_label: Union[CurveType, str],
+    dx: float,
+    dy: float,
+    duration: float,
+    generate_preview: bool = False,
+) -> Component:
+    """
+    Use component.timed.BezierMove() instead of calling directly.
+    Movement is RELATIVE displacement from current position.
+    """
+
+    if isinstance(curve_label, Enum):
+        label = curve_label.value
+    else:
+        label = curve_label
+
+    if label not in CURVE_PARAMS:
+        available = list(CURVE_PARAMS.keys())
+        raise KeyError(
+            f"Curve '{label}' not registered!\n"
+            f"Available curves: {available}\n"
+            f"Register it with: register_bezier_curve('{label}', ...)\n"
+            f"Or run: python setup_curves.py"
+        )
+
+    params: CurveParamsDict = CURVE_PARAMS[label]
+    target = component.target
+
+    if target == -1:
+        raise ValueError(
+            "No target set! Use component.set_context(target=...) or "
+            "component.temp_context() first"
+        )
+
+    # Extract parameters
+    T1 = duration * float(params["t_split"])
+    T2 = duration * (1 - float(params["t_split"]))
+    dx1 = dx * float(params["x_split"])
+    dx2 = dx * (1 - float(params["x_split"]))
+
+    # Segment 1: Ease-in X motion + polynomial Y motion
+    component.MoveBy(
+        time, dx=dx1, dy=0, t=T1, type=e.Easing.EASE_IN, rate=float(params["r_in"])
+    )
+
+    # Apply polynomial Y motion: y(t) = sum(coef_i * t^exp_i)
+    # Linear terms (exp=1.0) use NONE easing, higher powers use EASE_IN to match the exponent
+    for coef, exp in zip(params["y_coeffs_1"], params["y_exps"]):
+        dy_segment = dy * float(coef)
+
+        if abs(float(exp) - 1.0) < 1e-9:
+            easing = e.Easing.NONE  # Linear term: t^1
+            rate = 1.0
+        else:
+            easing = e.Easing.EASE_IN  # Polynomial term: t^exp
+            rate = float(exp)
+
+        component.MoveBy(time, dx=0, dy=dy_segment, t=T1, type=easing, rate=rate)
+
+    # Segment 2: Ease-out X motion + polynomial Y motion
+    component.MoveBy(
+        time, dx=dx2, dy=0, t=T2, type=e.Easing.EASE_OUT, rate=float(params["r_out"])
+    )
+
+    for coef, exp in zip(params["y_coeffs_2"], params["y_exps"]):
+        dy_segment = dy * float(coef)
+
+        if abs(float(exp) - 1.0) < 1e-9:
+            easing = e.Easing.NONE  # Linear term: t^1
+            rate = 1.0
+        else:
+            easing = e.Easing.EASE_IN  # Polynomial term: t^exp
+            rate = float(exp)
+
+        component.MoveBy(time, dx=0, dy=dy_segment, t=T2, type=easing, rate=rate)
+
+    if generate_preview:
+        _generate_movement_preview(label, params, dx, dy, duration)
+
+    return component
+
+
+# ============================================================================
+# PREVIEW GENERATION (Optional - requires matplotlib)
+# ============================================================================
+
+
+def generate_previews_parallel(
+    preview_specs: List[Tuple[str, CurveParamsDict, float, float, float]],
+    num_workers: Optional[int] = None,
+):
+    """Generate multiple curve previews in parallel."""
+    if num_workers is None:
+        num_workers = cpu_count()
+
+    print(f"Generating {len(preview_specs)} previews using {num_workers} workers...")
+
+    with Pool(num_workers) as pool:
+        results = pool.map(_generate_preview_worker, preview_specs)
+
+    for _name, _success, message in results:
+        print(message)
+
+    successes = sum(1 for _, success, _ in results if success)
+    print(f"\n✓ {successes}/{len(preview_specs)} previews generated successfully!")
+
+
+def _generate_preview_worker(
+    args: Tuple[str, CurveParamsDict, float, float, float]
+) -> Tuple[str, bool, str]:
+    """Worker function for parallel preview generation."""
+    curve_name, params, dx, dy, duration = args
+    try:
+        _generate_movement_preview(curve_name, params, dx, dy, duration)
+        return (curve_name, True, f"✓ Preview saved for {curve_name}")
+    except Exception as e:
+        return (curve_name, False, f"✗ Failed for {curve_name}: {e}")
+
+
+def _generate_movement_preview(
+    curve_name: str, params: CurveParamsDict, dx: float, dy: float, duration: float
+):
+    """Generate animated GIF preview. Saves to previews/{curve_name}_dx{dx}_dy{dy}.gif"""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")  # Use non-interactive backend
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FuncAnimation, PillowWriter
+    except ImportError as e:
+        print("⚠️  Preview generation requires matplotlib.")
+        print("    Install with: pip install matplotlib")
+        print(f"    Error: {e}")
+        return
+
+    print(f"Generating preview for '{curve_name}' movement...")
+
+    T1 = duration * float(params["t_split"])
+    T2 = duration * (1 - float(params["t_split"]))
+    dx1 = dx * float(params["x_split"])
+    dx2 = dx * (1 - float(params["x_split"]))
+
+    exps = np.array(params["y_exps"], dtype=float)
+    c1 = np.array(params["y_coeffs_1"], dtype=float)
+    c2 = np.array(params["y_coeffs_2"], dtype=float)
+
+    def position_at_time(t: float) -> Tuple[float, float]:
+        if t <= T1:
+            tau = t / T1 if T1 > 0 else 0
+            x = dx1 * ease_in(np.array(tau), float(params["r_in"])).item()
+            y = np.sum(c1 * (tau**exps)).item() * dy
+        else:
+            tau = (t - T1) / T2 if T2 > 0 else 0
+            x = dx1 + dx2 * ease_out(np.array(tau), float(params["r_out"])).item()
+            y = (np.sum(c1 * np.ones_like(exps)) + np.sum(c2 * (tau**exps))).item() * dy
+        return x, y
+
+    times = np.linspace(0, duration, PREVIEW_SAMPLES)
+    path = np.array([position_at_time(t) for t in times])
+
+    x_min, x_max = path[:, 0].min(), path[:, 0].max()
+    y_min, y_max = path[:, 1].min(), path[:, 1].max()
+
+    x_min = min(x_min, 0, dx)
+    x_max = max(x_max, 0, dx)
+    y_min = min(y_min, 0, dy)
+    y_max = max(y_max, 0, dy)
+
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    x_pad = x_range * PREVIEW_PADDING if x_range > 0 else 10
+    y_pad = y_range * PREVIEW_PADDING if y_range > 0 else 10
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    ax.plot(path[:, 0], path[:, 1], "b-", alpha=0.3, linewidth=2, label="Path")
+    ax.plot([0], [0], "go", markersize=10, label="Start (0,0)")
+    ax.plot([dx], [dy], "ro", markersize=10, label=f"End ({dx:.0f},{dy:.0f})")
+
+    (current_point,) = ax.plot([], [], "bo", markersize=8)
+    (trail,) = ax.plot([], [], "b-", alpha=0.6, linewidth=1)
+
+    bezier_pts = params.get("bezier_points", {})
+    if bezier_pts:
+        p0 = bezier_pts["p0"]
+        p1 = bezier_pts["p1"]
+        p2 = bezier_pts["p2"]
+        p3 = bezier_pts["p3"]
+
+        ctrl_x = [p0[0] * dx, p1[0] * dx, p2[0] * dx, p3[0] * dx]
+        ctrl_y = [p0[1] * dy, p1[1] * dy, p2[1] * dy, p3[1] * dy]
+        ax.plot(ctrl_x, ctrl_y, "r--", alpha=0.3, linewidth=1, label="Bezier control")
+        ax.plot(ctrl_x, ctrl_y, "rs", alpha=0.5, markersize=6)
+
+    ax.set_xlabel("X Position (relative)")
+    ax.set_ylabel("Y Position (relative)")
+    ax.set_title(
+        f"Bezier Movement: {curve_name}\ndx={dx}, dy={dy}, duration={duration}s"
+    )
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(x_min - x_pad, x_max + x_pad)
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+
+    def init():
+        current_point.set_data([], [])
+        trail.set_data([], [])
+        return current_point, trail
+
+    def update(frame: int) -> Tuple[Any, Any]:
+        idx = int((frame / (PREVIEW_FRAMES - 1)) * (PREVIEW_SAMPLES - 1))
+        current_point.set_data([path[idx, 0]], [path[idx, 1]])
+        trail.set_data(path[: idx + 1, 0], path[: idx + 1, 1])
+        return current_point, trail
+
+    try:
+        anim = FuncAnimation(
+            fig,
+            update,
+            init_func=init,
+            frames=PREVIEW_FRAMES,
+            interval=50,
+            blit=True,
+        )
+
+        output_dir = Path("previews")
+        output_dir.mkdir(exist_ok=True)
+        output_path = output_dir / f"{curve_name}_dx{int(dx)}_dy{int(dy)}.gif"
+
+        writer = PillowWriter(fps=PREVIEW_FPS)
+        anim.save(output_path, writer=writer)
+
+        print(f"✓ Preview saved to: {output_path}")
+    finally:
+        plt.close(fig)
+        plt.close("all")
+
 
 def list_curves() -> None:
-    """Print all registered curves with their quality info."""
+    """Print all registered curves."""
     if not CURVE_PARAMS:
         print("No curves registered yet.")
-        print("Use register_bezier_curve() to add curves.")
+        print("Use register_bezier_curve() to add curves or run: python setup_curves.py")
         return
-    
+
     print(f"\nRegistered Curves ({len(CURVE_PARAMS)} total):")
     print("=" * 80)
-    
+
     for label in sorted(CURVE_PARAMS.keys()):
-        params = CURVE_PARAMS[label]
-        quality_info = params.get("quality_info", {})
-        bp = params.get("bezier_points", {})
-        
+        params: CurveParamsDict = CURVE_PARAMS[label]
+        quality_info: QualityInfoDict = params["quality_info"]
+        bp: BezierPointsDict = params["bezier_points"]
+
         print(f"\n{label.upper()}")
         print(f"  Enum: CurveType.{label.upper()}")
         print(f"  String: '{label}'")
-        print(f"  Triggers: {quality_info.get('trigger_count', '?')}")
-        print(f"  Quality: {quality_info.get('quality_preset', 'unknown')}")
-        print(f"  Max speed dev: {quality_info.get('max_speed_dev', 0)*100:.2f}%")
-        if bp:
-            print(f"  Bezier: p0={bp.get('p0')}, p1={bp.get('p1')}, p2={bp.get('p2')}, p3={bp.get('p3')}")
-    
+        print(f"  Triggers: {quality_info['trigger_count']}")
+        print(f"  Quality: {quality_info['quality_preset']}")
+        print(f"  Max speed dev: {quality_info['max_speed_dev']*100:.2f}%")
+        print(
+            f"  Bezier: p0={bp['p0']}, p1={bp['p1']}, "
+            f"p2={bp['p2']}, p3={bp['p3']}"
+        )
+
     print("\n" + "=" * 80)
-
-
-__all__ = [
-    "CurveType",
-    "QUALITY_PRESETS",
-    "register_bezier_curve",
-    "apply_bezier_movement",
-    "list_curves",
-]

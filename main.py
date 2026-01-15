@@ -68,25 +68,25 @@ test_enemy = (Component("TestEnemy", unknown_g(), 5)
         .GotoGroup(0, middle_test)
     .set_context(target=c1.all)
         .timed.BezierMove(0.6, CurveType.BOSS_CHARGE, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.BOSS_WEAVE, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.FAST_ARC, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.GENTLE_ARC, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.GENTLE_ARC_DOWN, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.S_CURVE, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.S_CURVE_REVERSE, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.SMOOTH_EASE, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.STEEP_DIVE, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
         .timed.BezierMove(0.6, CurveType.STEEP_RISE, 
-            dx=-100, dy=100, duration=5.0, generate_preview=True)
+            dx=-100, dy=100, t=5.0)
     .clear_context()
 )
 
