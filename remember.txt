@@ -1,7 +1,8 @@
 
 # DANMAKU DESIGN NOTES:
+BEZIER CURVE GENERATOR:
+https://www.desmos.com/calculator/lub8yrgo5h
 Rings: explore letting the faster bullets of a later ring to pass slower bullets of an earlier ring, resulting in pattern overlap and higher complexity.
-
 
 
 Micrododge idea: make shapes out of bullets, that then disintegrate into more spread out bullets, making the player micrododge through the mess.
@@ -40,7 +41,6 @@ Midboss: none
 Endboss: ??? (formerly called Nameless Entity)
 
 TODO:
-- PointerCircle: Add 'follow rotation' alongside 'follow position'
 
 - Minor Optimization: Cache 'enforce_solid_groups' if used multiple times for the same groups
 
@@ -49,9 +49,6 @@ TODO:
 - Make PointerCircle have tighter setup timings (currently takes multiple ticks instead of ~3)
 
 - Add basic Bombing (keybind + texture)
-
-- Add rounding to 6 significant digits to trigger spread 
-  (to make sure rounded X positions dont break spawn order)
 
 - Followed ring pattern: Bullets spawn in a ring formation, but all go in the same direction and speed, keeping their original shape as they move. You can make it optionally rotate on each patterns center, but that would require a pointer for each shape.
 

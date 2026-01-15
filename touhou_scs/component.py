@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import functools
 from typing import Any, Callable, NamedTuple
 
+from touhou_scs.movements import CurveType, apply_bezier_movement
 from touhou_scs import enums as enum, lib, utils as util
 from touhou_scs.utils import unknown_g, warn
 from touhou_scs.types import Trigger
@@ -1016,5 +1017,46 @@ class TimedPatterns:
                     time + (i * spacing), targetDir, t=t, dist=dist, type=type, rate=rate
                 )
         return self._component
+    
+    def BezierMove(self, time: float, curve_label: CurveType, *, 
+        dx: float, dy: float, duration: float, generate_preview: bool = False):
+        """
+        Apply smooth Bezier curved movement using pre-registered curves.
+        
+        Curves must be registered first using movements.register_bezier_curve().
+        Uses the component's current target context.
+        
+        Movement is RELATIVE - the curve is applied as a displacement from the 
+        object's current position. This is consistent with MoveBy behavior.
+        
+        Args:
+            time: When to start the movement
+            curve_label: Curve name string or CurveType enum
+            dx: Total horizontal displacement (relative)
+            dy: Total vertical displacement (relative)
+            duration: How long the movement takes
+            generate_preview: If True, generates an animated GIF preview of the movement
+        
+        Returns:
+            The component (for chaining)
+        
+        Example:
+            # Register curves once (at startup or in separate script)
+            from touhou_scs.movements import register_bezier_curve
+            register_bezier_curve("gentle_arc",
+                p0=(0, 0), p1=(0.2, 0.6), p2=(0.8, 1.2), p3=(1, 1),
+                quality="medium")
+            
+            # Use in component (moves 200 right, 100 down in gentle arc)
+            enemy = Component("Enemy", unknown_g(), 5)
+            enemy.set_context(target=enemy_group)
+            enemy.SetPosition(1.0, x=100, y=400)  # Set start position if needed
+            enemy.timed.BezierMove(1.0, "gentle_arc", dx=200, dy=-100, duration=4.0)
+        """
+        
+        return apply_bezier_movement(
+            self._component, time, curve_label,
+            dx, dy, duration, generate_preview=generate_preview
+        )
 
     # More pattern methods will be added here
