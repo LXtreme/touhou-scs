@@ -585,32 +585,34 @@ def _spread_triggers(triggers: list[Trigger], comp: ComponentProtocol, trigger_a
 
 
 def _generate_statistics(object_budget: int = 200000) -> dict[str, Any]:
-    total_triggers = sum(len(c.triggers) for c in all_components)
-
-    spell_stats = {}
-    component_stats = {}
-
+    # Cache trigger counts (single pass over all_components)
+    trigger_counts = {comp: len(comp.triggers) for comp in all_components}
+    total_triggers = sum(trigger_counts.values())
+    
+    # Build component usage map and spell stats in one pass over all_spells
     component_usage: dict[ComponentProtocol, int] = {}
-    for spell in all_spells:
-        for comp in spell.components:
-            component_usage[comp] = component_usage.get(comp, 0) + 1
-
-    shared_components = {comp for comp, count in component_usage.items() if count > 1}
-
+    spell_stats = {}
+    
     for spell in all_spells:
         spell_trigger_count = 0
         for comp in spell.components:
-            if comp not in shared_components:
-                spell_trigger_count += len(comp.triggers)
+            component_usage[comp] = component_usage.get(comp, 0) + 1
+            spell_trigger_count += trigger_counts[comp]
         spell_stats[spell.spell_name] = spell_trigger_count
-
-    shared_trigger_count = sum(len(comp.triggers) for comp in shared_components)
-
-    for comp in all_components:
-        component_stats[comp.name] = (len(comp.triggers), comp.caller)
-
-    usage_percent = (total_triggers / object_budget) * 100 if total_triggers > 0 else 0
-    remaining_budget = object_budget - total_triggers
+    
+    # Identify shared components and subtract their counts from spell stats
+    shared_trigger_count = 0
+    for comp, usage_count in component_usage.items():
+        if usage_count > 1:
+            comp_triggers = trigger_counts[comp]
+            shared_trigger_count += comp_triggers
+            # Subtract shared component triggers from each spell that uses it
+            for spell in all_spells:
+                if comp in spell.components:
+                    spell_stats[spell.spell_name] -= comp_triggers
+    
+    # Build component stats (reuse cached trigger_counts)
+    component_stats = {comp.name: (trigger_counts[comp], comp.caller) for comp in all_components}
 
     return {
         "spell_stats": spell_stats,
@@ -618,9 +620,7 @@ def _generate_statistics(object_budget: int = 200000) -> dict[str, Any]:
         "shared_trigger_count": shared_trigger_count,
         "budget": {
             "total_triggers": total_triggers,
-            "object_budget": object_budget,
-            "usage_percent": usage_percent,
-            "remaining_budget": remaining_budget
+            "object_budget": object_budget
         }
     }
 
@@ -628,9 +628,11 @@ def _generate_statistics(object_budget: int = 200000) -> dict[str, Any]:
 def _print_budget_analysis(stats: dict[str, Any]) -> None:
     """Print formatted budget analysis to console."""
     budget = stats["budget"]
+    remaining_budget = budget["object_budget"] - budget["total_triggers"]
+    percentage_used = (budget["total_triggers"] / budget["object_budget"]) * 100
     print("\n\033[4m=== BUDGET ANALYSIS ===\033[0m")
-    print(f"Total triggers: {budget['total_triggers']} ({budget['usage_percent']:.3f}%)")
-    print(f"Remaining budget: {budget['remaining_budget']} triggers")
+    print(f"Total triggers: {budget['total_triggers']} ({percentage_used:.3f}%)")
+    print(f"Remaining budget: {remaining_budget} triggers")
 
     spell_stats = stats.get("spell_stats", {})
     if spell_stats:
