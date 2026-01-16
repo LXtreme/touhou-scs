@@ -4,7 +4,7 @@ from touhou_scs.component import Component
 from touhou_scs.lib import Stage, enemy1, save_all
 from touhou_scs.misc import add_disable_all_bullets, add_enemy_collisions, add_plr_collisions
 from touhou_scs.utils import unknown_g
-from touhou_scs.movements import CurveType
+from touhou_scs.movements import CurveType, wait_for_previews
 
 if __name__ != "__main__":
     print("Don't import this! exiting.")
@@ -146,3 +146,5 @@ add_enemy_collisions()
 add_disable_all_bullets()
 add_plr_collisions()
 save_all()
+
+wait_for_previews()
