@@ -2,8 +2,6 @@
 Touhou SCS - Component Module
 
 Component class for building trigger sequences with method chaining.
-
-URGENT: SpellBuilder is not yet implemented! stuff is commented out until then.
 """
 
 from __future__ import annotations
@@ -15,9 +13,6 @@ from touhou_scs.movements import CurveType, apply_bezier_movement
 from touhou_scs import enums as enum, lib, utils as util
 from touhou_scs.utils import unknown_g, warn
 from touhou_scs.types import Trigger
-
-
-_RESTRICTED_LOOKUP = { group_id: True for group_id in enum.RESTRICTED_GROUPS }
 
 ppt = enum.Properties # shorthand
 
@@ -59,7 +54,7 @@ def _validate_params_cached(*,
                 raise RuntimeError(f"Trigger requires an active target context. Got: {targets}")
             if targets <= 0:
                 raise ValueError(f"Target Group '{targets}' must be positive (>0).")
-            if targets in _RESTRICTED_LOOKUP:
+            if targets in enum.RESTRICTED_GROUPS:
                 raise ValueError(f"Target Group '{targets}' is restricted.")
         else:
             for g in targets:
@@ -67,7 +62,7 @@ def _validate_params_cached(*,
                     raise RuntimeError(f"Trigger requires an active target context. Got: {g}")
                 if g <= 0:
                     raise ValueError(f"Target Group '{g}' must be positive (>0).")
-                if g in _RESTRICTED_LOOKUP:
+                if g in enum.RESTRICTED_GROUPS:
                     raise ValueError(f"Target Group '{g}' is restricted.")
     
     if type is not None and (not (0 <= type <= 18) or not type.is_integer()):
