@@ -68,7 +68,7 @@ class Spell:
 # USEFUL/NEEDED UTILS
 # ============================================================================
 
-@dataclass
+@dataclass(slots=True)
 class HSB:
     h: float
     s: float

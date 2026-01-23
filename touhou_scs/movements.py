@@ -48,7 +48,7 @@ import random
 import json
 import hashlib
 import numpy as np
-from multiprocessing import Pool, Process, cpu_count, get_context
+from multiprocessing import Pool, cpu_count, get_context
 from touhou_scs import enums as e
 
 if TYPE_CHECKING: from touhou_scs.component import Component
@@ -170,7 +170,7 @@ class NewCurveParams(TypedDict):
 CurveParams = Union[OldCurveParams, NewCurveParams]
 
 
-@dataclass
+@dataclass(slots=True, kw_only=True)
 class OptimizationResult:
     t_split: float
     x_split: float
@@ -345,7 +345,7 @@ def _nnls_with_sum_constraint(G: np.ndarray, y: np.ndarray, w_sum: float = 50.0)
     return a
 
 
-@dataclass
+@dataclass(slots=True)
 class FitResult:
     terms: List[BasisTermDict]
     rmse: float
