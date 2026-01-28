@@ -18,7 +18,6 @@ c1 = lib.circle1
 
 # ===========================================================================
 # POSITIONING POINTERS
-# These are invisible groups we move around to use as coordinates
 # ===========================================================================
 
 top_left = lib.pointer.next()
@@ -53,6 +52,9 @@ test_bullet = (Component("TestBullet", unknown_g(), 5)
         .Scale(0, factor=2, t=0.3, reverse=True)
         .PointToGroup(e.TICK, e.EMPTY_TARGET_GROUP)
         .MoveTowards(0.2, e.EMPTY_TARGET_GROUP, t=6, dist=450, type=e.Easing.EASE_IN, rate=1.6)
+    .set_context(target=e.EMPTY_COLLISION)
+        .Toggle(-e.TICK, False)
+        .Toggle(1, True)
     .clear_context()
 )
 
@@ -89,21 +91,9 @@ test_enemy = (Component("TestEnemy", unknown_g(), 5)
     .pointer.CleanPointerCircle()
 )
 
-# ===========================================================================
-# SPAWN ENEMIES ON STAGE
-# ===========================================================================
-
 enemy1.spawn_enemy(Stage.stage1, 1.0, test_enemy, 51, test_enemy_g)
 
-# ===========================================================================
-# STAGE SETUP
-# ===========================================================================
-
 Stage.stage1.Spawn(0, pos_setup.caller, True)
-
-# ===========================================================================
-# SYSTEM SETUP
-# ===========================================================================
 
 add_enemy_collisions()
 add_disable_all_bullets()
