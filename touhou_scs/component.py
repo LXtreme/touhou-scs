@@ -804,6 +804,45 @@ class Pointer:
         return self._component
 
 
+class BulletAlloc:
+    offset: float = 0
+    deferred_calls: list[tuple[float, Callable[..., Any]]] = []
+    active: bool = False
+    
+    @classmethod
+    def start(cls):
+        cls.offset = 0
+        cls.deferred_calls.clear()
+        cls.active = True
+    
+    @classmethod
+    def set_offset(cls, time: float):
+        if not cls.active:
+            raise RuntimeError("BulletAlloc.set_offset: BulletAlloc not active")
+        cls.offset = time
+    
+    @classmethod
+    def resolve(cls):
+        if not cls.active:
+            raise RuntimeError("BulletAlloc.set_offset: BulletAlloc not active")
+        if len(cls.deferred_calls) == 0:
+            raise RuntimeError("BulletAlloc.resolve: No deferred calls to resolve")
+        
+        cls.deferred_calls.sort(key=lambda x: x[0])
+        for _, func in cls.deferred_calls:
+            func()
+        cls.offset = 0
+        cls.deferred_calls.clear()
+        cls.active = False
+    
+    @classmethod
+    def defer(cls, time: float, func: Callable[..., None]):
+        """For internal pattern methods to call"""
+        if not cls.active:
+            raise RuntimeError("BulletAlloc.set_offset: BulletAlloc not active")
+        cls.deferred_calls.append((time + cls.offset, func))
+
+
 class InstantPatterns:
     def __init__(self, component: Component):
         self._component = component
@@ -853,8 +892,9 @@ class InstantPatterns:
                 else:
                     remap.pair(target, enum.EMPTY_MULTITARGET)
 
-        Multitarget.spawn_with_remap(self._component, time, numBullets, comp, remap_arc)
-
+        BulletAlloc.defer(time, 
+            lambda: Multitarget.spawn_with_remap(self._component, time, numBullets, comp, remap_arc)
+        )
         return self._component
 
 
@@ -932,17 +972,20 @@ class InstantPatterns:
                     remap.pair(target, emitter)
                 else:
                     remap.pair(target, enum.EMPTY_MULTITARGET)
+        
+        def deferred():
+            Multitarget.spawn_with_remap(self._component, time, numBullets, comp, remap_line)
+    
+            step = (slowestTime - fastestTime) / (numBullets - 1)
+            for i, bullet_group in enumerate(bullet_groups):
+                travel_time = fastestTime + step * i
+                with self._component.temp_context(target=bullet_group):
+                    self._component.MoveTowards(
+                        time, targetDir,
+                        t=travel_time, dist=dist, type=type, rate=rate
+                    )
 
-        Multitarget.spawn_with_remap(self._component, time, numBullets, comp, remap_line)
-
-        step = (slowestTime - fastestTime) / (numBullets - 1)
-        for i, bullet_group in enumerate(bullet_groups):
-            travel_time = fastestTime + step * i
-            with self._component.temp_context(target=bullet_group):
-                self._component.MoveTowards(
-                    time, targetDir,
-                    t=travel_time, dist=dist, type=type, rate=rate
-                )
+        BulletAlloc.defer(time, deferred)
 
         return self._component
 
