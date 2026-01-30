@@ -50,7 +50,7 @@ test_bullet = (Component("TestBullet", unknown_g(), 5)
         .Scale(0, factor=2, t=0.3, reverse=True)
         .PointToGroup(e.TICK, e.EMPTY_TARGET_GROUP)
         .MoveTowards(0.2, e.EMPTY_TARGET_GROUP, t=6, dist=450, type=e.Easing.EASE_IN, rate=1.6)
-        .Pulse(3, rgb(0,165,185), fadeIn=0.1, t=0.1, fadeOut=0.4)
+        .Pulse(2, rgb(0,165,185), fadeIn=0.1, t=0, fadeOut=0.4)
     .set_context(target=e.EMPTY_COLLISION)
         .Toggle(-e.TICK, False)
         .Toggle(1, True)
@@ -59,8 +59,10 @@ test_bullet = (Component("TestBullet", unknown_g(), 5)
 
 # ===========================================================================
 # TEST PATTERNS
-# =========================================================================
+# ===========================================================================
+
 BulletAlloc.start()
+
 test_enemy_g = enemy1.next()
 test_enemy = (Component("TestEnemy", unknown_g(), 5)
     .assert_spawn_order(True)
@@ -73,16 +75,18 @@ test_enemy = (Component("TestEnemy", unknown_g(), 5)
     .set_context(target=test_enemy.pointer.pc.all)
         .MoveBy(0.5, dx=-200, dy=0, t=10)
     .clear_context()
-    .timed.RadialWave(1.0, test_bullet, lib.bullet1, waves=10, interval=1,numBullets=35)
+    .timed.RadialWave(1.0, test_bullet, lib.bullet1, waves=10, interval=1, numBullets=35)
     .pointer.CleanPointerCircle()
     .pointer.SetPointerCircle(0.4, location=test_enemy_g, follow=True)
     .set_context(target=test_enemy.pointer.pc.all)
         .MoveBy(0.5, dx=200, dy=0, t=10)
     .clear_context()
-    .timed.RadialWave(1.0, test_bullet, lib.bullet1, waves=10, interval=1,numBullets=35)
+    .timed.RadialWave(1.0, test_bullet, lib.bullet1, waves=10, interval=1, numBullets=35)
     .pointer.CleanPointerCircle()
 )
+
 BulletAlloc.resolve()
+
 enemy1.spawn_enemy(Stage.stage1, 1.0, test_enemy, 51, test_enemy_g)
 
 Stage.stage1.Spawn(0, pos_setup.caller, True)

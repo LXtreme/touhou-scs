@@ -811,8 +811,8 @@ class BulletAlloc:
     
     @classmethod
     def start(cls):
-        cls.offset = 0
-        cls.deferred_calls.clear()
+        if cls.active:
+            raise RuntimeError("BulletAlloc.start: BulletAlloc already active")
         cls.active = True
     
     @classmethod
