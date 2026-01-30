@@ -194,7 +194,7 @@ bullet3 = BulletPool(2901, 3600, False)
 bullet4 = BulletPool(4301, 4700, False)
 
 class pointer:
-    obj_count = 100
+    obj_count = 250
     _DEBUG_UI_GROUP = 33
     pointer_comp = Component("Pointers", 0, 11).assert_spawn_order(False)
     pointers = [unknown_g() for _ in range(obj_count)]

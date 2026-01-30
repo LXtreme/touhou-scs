@@ -737,6 +737,13 @@ class Pointer:
         return self._pc
 
     def SetPointerCircle(self, time: float, *, location: int, follow: bool, set_north: bool = True):
+        """
+        Set new pointercircle to allocate pointers into position.
+        
+        Follow mode:
+        - Allocates a new group to the pointers used in this guidercircle.
+        - Allows the pointercircle to undergo any transformations (rotate, scale, move)
+        """
         if self._pc is not None:
             raise RuntimeError(f"Component '{self._component.name}': PointerCircle already active")
 
@@ -745,10 +752,6 @@ class Pointer:
         else:
             pc = lib.GuiderCircle(point=0, center=0, all_group=0)
 
-        # Expanded timing to avoid race conditions with multitarget spawning:
-        # - Setup happens earlier (time - TICK*4 to time - TICK*2)
-        # - This gives room for CleanPointerCircle to run at time
-        # - Circle is ready by time (1 tick after call, as required)
         with self._component.temp_context(target=lib.circle1.all):
             self._component.GotoGroup(time - enum.TICK*4, location)
             if set_north:
@@ -997,7 +1000,7 @@ class TimedPatterns:
         self._component = component
 
     def RadialWave(self, time: float, comp: Component, bullet: lib.BulletPool, *,
-        waves: int, interval: float = 0, numBullets: int | None = None, spacing: int | None = None, centerAt: float = 0):
+        waves: int, interval: float, numBullets: int | None = None, spacing: int | None = None, centerAt: float = 0):
         """
         Radial Wave pattern - multiple waves of radial bullets over time
 
