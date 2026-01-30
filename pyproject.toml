@@ -22,6 +22,9 @@ dev = [
 typeCheckingMode = "strict"
 reportAny = "none" # Allow implicit any types
 reportExplicitAny = "none" # Allow explicit any types
+reportMissingTypeStubs = "none"
+venvPath = "."
+venv = "venv"
 
 [tool.ruff.lint]
 ignore = ["E701"] # Ignore multiple statements on one line
