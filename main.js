@@ -22,7 +22,7 @@ $.exportConfig({
 	// or 'live_editor' to export to WSLiveEditor (must have Geode installed)
 	options: {
 		info: true,
-		level_name: "touhou scs mig",
+		level_name: "touhou scs",
 	}
 }).then(a => {
 	const jsonData = require('fs').readFileSync('triggers.json', 'utf8');

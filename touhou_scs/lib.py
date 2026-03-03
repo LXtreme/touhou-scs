@@ -48,7 +48,7 @@ _start_time = time.time()
 DEFAULT_TRIGGER_AREA: TriggerArea = {
     "min_x": 1350,
     "min_y": 1300,
-    "max_x": 9000,
+    "max_x": 20000,
     "max_y": 4500
 }
 
