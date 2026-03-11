@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "@g-js-api/g.js": "^5.7.13",
-    "uuid": "^11.1.0"
-  }
-}
