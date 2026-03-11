@@ -18,9 +18,14 @@ Macrododge idea: include large bullets or large shapes made of bullets that are 
 Keep stage practice in mind: 
 all spells are modular and should be able to run in a vacuum
 
+## Touhou Shattered Crystal Shards
+
 # STAGES #
 Premise: Comet shatters as it crashes into gensokyo, some spot a strange structure/shapes on the biggest broken piece as it crashed. 
 (show this on title screen and allude during dialogue)
+
+Gimmick: The player collects shards which give a temporary firerate buff and larger deathbomb window
+
 Stage 1: Outskirts of human village and shrine
 Midboss: Daiyousei
 Endboss: Cirno
@@ -38,7 +43,7 @@ Midboss: Reisen or tewi
 Endboss: Reisen
 Stage 6: crash site (a bit of fire near the end, approaches alien structure )
 Midboss: none
-Endboss: ??? (formerly called Nameless Entity)
+Endboss: ??? (alien shapeshifter that has spells from other characters (maybe protagonist included)) or straight fighing Mechamaru from JJ
 
 TODO:
 
