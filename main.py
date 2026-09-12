@@ -168,6 +168,7 @@ def make_patrol_enemy(enemy_g: int, bullet_type: lib.BulletPool) -> Component:
         .set_context(target=enemy_g)
             .GotoGroup(0, chain_entry)
             .GotoGroup(e.TICK, chain_mid_l, t=MOVE_IN_T, type=e.Easing.EASE_IN_OUT, rate=2)
+            .Pulse(0, rgb(0, 255, 0), t=MOVE_IN_T + SWEEP_T + MOVE_OUT_T)
 
         # -- Sweep: glide from mid_l to mid_r while shooting --
             .GotoGroup(MOVE_IN_T, chain_mid_r, t=SWEEP_T, type=e.Easing.NONE)

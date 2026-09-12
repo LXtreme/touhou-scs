@@ -18,7 +18,7 @@ from touhou_scs import enums as enum, lib, utils as util
 from touhou_scs.utils import unknown_g, warn
 from touhou_scs.types import GenericObj
 
-from gmdbuilder import new_obj, obj_id, obj_prop
+from gmdbuilder import from_object_string, new_obj, obj_id, obj_prop
 
 ppt = obj_prop.Trigger
 
@@ -680,6 +680,24 @@ class Component:
         trigger[ppt.ItemEdit.MOD] = mod
         if sign: trigger[ppt.ItemEdit.ITEM_OP_1] = sign.value # op for 'target = target (sign) (mod)' 
         
+        return self
+
+    def TriggerFromStr(self, time: float, string: str):
+        """Add a trigger from an object string and automatically set it up for the component"""
+
+        trigger: GenericObj = from_object_string(string) # type: ignore
+        if obj_prop.Y in trigger: del trigger[obj_prop.Y]
+        
+        if "a51" in trigger and self.target == -1:
+            raise RuntimeError("TriggerFromStr: Trigger has a target field but a target is not selected")
+
+        trigger[obj_prop.X] = util.time_to_dist(time)
+        trigger[obj_prop.GROUPS] = self.groups
+        trigger[obj_prop.EDITOR_L1] = self.editorLayer
+        trigger[ppt.SPAWN_TRIGGER] = True
+        trigger[ppt.MULTI_TRIGGER] = True
+        self.triggers.append(trigger)
+
         return self
 
 

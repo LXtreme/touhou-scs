@@ -393,6 +393,8 @@ despawner = (Component("Despawner", unknown_g(), 7)
     #     .GotoGroup(0, enum.NORTH_GROUP)
     .clear_context()
     .Stop(0, target=enum.EMPTY1)
+    # specific sfx 
+    .TriggerFromStr(0, "1,3602,2,225,3,-165,155,1,62,1,87,1,36,1,392,2032,404,11,405,-7,406,0.89,407,1,421,1,422,0.5,10,0.5,433,1,490,0.55;")
     .Spawn(0, toggler, False, delay=0.3)
     .Spawn(0, enum.EMPTY2, True)
 )

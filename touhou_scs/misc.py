@@ -378,14 +378,15 @@ def make_shot_despawn(name: str, damage: tuple[float, float, float, float, float
         .set_context(target=enum.EMPTY_TARGET_GROUP)
             .Pulse(0, lib.rgb(0,0,255), fadeIn=0.1, fadeOut=0.1, exclusive=True)
         .clear_context()
-        .Spawn(0, 451, False)
+        # player bullet hitting enemy sfx
+        .TriggerFromStr(0, "1,3602,2,225,3,-165,155,1,62,1,87,1,36,1,392,2032,404,11,405,-7,406,0.89,407,1,421,1,422,0.5,10,0.5,433,1,490,0.55,597,1;")
         .Spawn(0, despawn_g, True)
     )
 
 ofuda_bullet_despawn = make_shot_despawn("ReimuA Regular", (-0.4, -0.5, -0.6, -0.7, -0.8), despawn2.caller)
 homing_bullet_despawn = make_shot_despawn("ReimuA Homing",  (-0.3, -0.35, -0.4, -0.5, -0.6), despawn2.caller)
 bomb_bullet_despawn = make_shot_despawn("ReimuA Bomb", (-1.0, -1.2,  -1.4, -1.6, -2.0), enum.EMPTY_BULLET)
-needle_bullet_despawn = make_shot_despawn("ReimuA Needle", (-0.7, -0.8, -0.9/2, -1/2, -1.2/2), despawn2.caller)
+needle_bullet_despawn = make_shot_despawn("ReimuA Needle", (-0.7*1.15, -0.8*1.15, -0.9/2*1.15, -1/2*1.15, -1.2/2*1.15), despawn2.caller)
 
 
 # =============================
