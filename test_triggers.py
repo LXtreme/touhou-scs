@@ -16,11 +16,12 @@ import warnings
 import pytest
 from pytest import ExceptionInfo
 from touhou_scs.component import Component, Multitarget, BulletAlloc
-from touhou_scs import enums, lib, utils
+from touhou_scs import enums, lib
 from typing import Any
 from touhou_scs.movements import CurveType
 
 from gmdbuilder import obj_id
+from gmdbuilder.mappings import obj_prop
 
 @pytest.fixture(autouse=True)
 def reset_global_state():
@@ -60,7 +61,7 @@ def spawn_ordered_comp():
     return comp
 
 
-ppt = enums.Properties
+ppt = obj_prop.Trigger
 
 def assert_error(exc_info: ExceptionInfo[BaseException], *patterns: str) -> None:
     """Assert exception message contains all patterns (case-insensitive)."""
@@ -90,17 +91,20 @@ class TestSpawnTargetValidation:
             assert_error(exc, *error_patterns)
         else:
             comp.Spawn(0, target, spawnOrdered=False)
-            assert comp.triggers[0][ppt.TARGET] == target
+            assert comp.triggers[0][ppt.Move.TARGET_ID] == target
     
     @pytest.mark.parametrize("target,error_patterns", [
         (-50, ("non-negative", "-50")),
         (3, ("restricted", "3")),
-        (utils.unknown_g.counter + 1, ("out of valid range",)),
+        (10000, ("out of valid range",)),
+        # 0 is only meaningful as a remap source; targeting it directly is rejected on purpose
+        (0, ("out of valid range",)),
+        (9999, ("restricted", "9999")),
     ])
     def test_spawn_target_rejected(self, target: int, error_patterns: tuple[str, ...]):
         self._test_spawn_target(target, True, *error_patterns)
     
-    @pytest.mark.parametrize("target", [0, 10, utils.unknown_g.counter])
+    @pytest.mark.parametrize("target", [10, 9998])
     def test_spawn_target_valid(self, target: int):
         self._test_spawn_target(target, False)
 
@@ -120,36 +124,30 @@ class TestSpawnDelayValidation:
         else:
             comp.Spawn(0, 50, spawnOrdered=False, delay=delay)
             if delay > 0:
-                assert comp.triggers[0][ppt.SPAWN_DELAY] == delay
+                assert comp.triggers[0][ppt.Spawn.DELAY] == delay
     
     def test_spawn_zero_delay_not_stored(self):
         """Zero delay is not stored as a property"""
         comp = Component("Test", 100).Spawn(0, 50, spawnOrdered=False, delay=0)
-        assert ppt.SPAWN_DELAY not in comp.triggers[0]
+        assert ppt.Spawn.DELAY not in comp.triggers[0]
     
     def test_spawn_positive_delay_stored(self):
         """Positive delay is stored correctly"""
         comp = Component("Test", 100).Spawn(0, 50, spawnOrdered=False, delay=0.5)
-        assert comp.triggers[0][ppt.SPAWN_DELAY] == 0.5
+        assert comp.triggers[0][ppt.Spawn.DELAY] == 0.5
 
 
 class TestSpawnRemapValidation:
-    def test_spawn_remap_empty_string_not_stored(self):
-        """Empty remap string is silently skipped"""
-        comp = Component("Test", 100).Spawn(0, 50, spawnOrdered=False, remap="")
-        assert ppt.REMAP_STRING not in comp.triggers[0]
+    # Odd-pair / duplicate-source cases can't exist anymore: remap is a dict (gmdbuilder serializes it)
 
-    def test_spawn_remap_odd_pairs_rejected(self):
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Spawn(0, 50, spawnOrdered=False, remap="1.2.3")
-        assert_error(exc, "even number")
+    def test_spawn_remap_empty_dict_not_stored(self):
+        """Empty remap is silently skipped"""
+        comp = Component("Test", 100).Spawn(0, 50, spawnOrdered=False, remap={})
+        assert ppt.Spawn.REMAPS not in comp.triggers[0]
 
-    def test_spawn_remap_duplicate_source_rejected(self):
-        comp = Component("Test", 100)
-        with pytest.raises(ValueError) as exc:
-            comp.Spawn(0, 50, spawnOrdered=False, remap="10.20.10.30")
-        assert_error(exc, "duplicate source", "10")
+    def test_spawn_remap_stored(self):
+        comp = Component("Test", 100).Spawn(0, 50, spawnOrdered=False, remap={10: 20, 30: 40})
+        assert comp.triggers[0][ppt.Spawn.REMAPS] == {10: 20, 30: 40}
 
 
 # ============================================================================
@@ -183,9 +181,9 @@ class TestMoveEasingValidation:
         else:
             comp_with_target.MoveTowards(0, targetDir=60, **kwargs)
             if type is not None:
-                assert comp_with_target.triggers[0][ppt.EASING] == type
+                assert comp_with_target.triggers[0][ppt.Move.EASING] == type
             if rate is not None:
-                assert comp_with_target.triggers[0][ppt.EASING_RATE] == rate
+                assert comp_with_target.triggers[0][ppt.Move.EASE_RATE] == rate
 
 
 class TestMoveDurationValidation:
@@ -197,12 +195,12 @@ class TestMoveDurationValidation:
     def test_duration_zero_sets_silent(self, comp_with_target: Component):
         """Duration=0 should set MOVE_SILENT=True"""
         comp_with_target.MoveTowards(0, targetDir=60, t=0, dist=100)
-        assert comp_with_target.triggers[0][ppt.MOVE_SILENT]
+        assert comp_with_target.triggers[0][ppt.Move.SILENT]
     
     def test_duration_positive_no_silent(self, comp_with_target: Component):
         """Duration>0 should not set MOVE_SILENT"""
         comp_with_target.MoveTowards(0, targetDir=60, t=1.0, dist=100)
-        assert ppt.MOVE_SILENT not in comp_with_target.triggers[0]
+        assert ppt.Move.SILENT not in comp_with_target.triggers[0]
 
 
 # ============================================================================
@@ -225,12 +223,12 @@ class TestAlphaOpacityValidation:
         else:
             comp_with_target.Alpha(0, opacity=opacity)
             # Opacity is stored as decimal (0-1 range)
-            assert comp_with_target.triggers[0][ppt.OPACITY] == opacity / 100.0
+            assert comp_with_target.triggers[0][ppt.Alpha.OPACITY] == opacity / 100.0
     
     def test_opacity_converts_to_decimal(self, comp_with_target: Component):
         """Opacity is stored as decimal (0-1 range)"""
         comp_with_target.Alpha(0, opacity=75)
-        assert comp_with_target.triggers[0][ppt.OPACITY] == 0.75
+        assert comp_with_target.triggers[0][ppt.Alpha.OPACITY] == 0.75
 
 
 # ============================================================================
@@ -280,7 +278,7 @@ class TestCountItemIdValidation:
             assert_error(exc, *error_patterns)
         else:
             comp_with_target.Count(0, item_id=item_id, count=5, activateGroup=True)
-            assert comp_with_target.triggers[0][ppt.ITEM_ID] == item_id
+            assert comp_with_target.triggers[0][ppt.Pickup.ITEM_ID] == item_id
 
 
 # ============================================================================
@@ -311,14 +309,14 @@ class TestPickupValidation:
             assert_error(exc, *error_patterns)
         else:
             comp.Pickup(0, item_id=item_id, count=count, override=False)
-            assert comp.triggers[0][ppt.ITEM_ID] == item_id
-            assert comp.triggers[0][ppt.PICKUP_COUNT] == count
+            assert comp.triggers[0][ppt.Pickup.ITEM_ID] == item_id
+            assert comp.triggers[0][ppt.Pickup.COUNT] == count
     
     def test_pickup_no_target_property(self):
         """Pickup trigger should not have TARGET property"""
         comp = Component("Test", 100)
         comp.Pickup(0, item_id=12, count=50, override=True)
-        assert ppt.TARGET not in comp.triggers[0]
+        assert ppt.Move.TARGET_ID not in comp.triggers[0]
 
 
 # ============================================================================
@@ -365,19 +363,19 @@ class TestPickupModifyValidation:
         """Multiply mode should set PICKUP_MULTIPLY_DIVIDE=1"""
         comp = Component("Test", 100)
         comp.PickupModify(0, item_id=11, factor=1.45, multiply=True)
-        assert comp.triggers[0][ppt.PICKUP_MULTIPLY_DIVIDE] == 1
+        assert comp.triggers[0][ppt.Pickup.MODE] == 1
     
     def test_pickup_modify_divide_mode_value(self):
         """Divide mode should set PICKUP_MULTIPLY_DIVIDE=2"""
         comp = Component("Test", 100)
         comp.PickupModify(0, item_id=11, factor=2.0, divide=True)
-        assert comp.triggers[0][ppt.PICKUP_MULTIPLY_DIVIDE] == 2
+        assert comp.triggers[0][ppt.Pickup.MODE] == 2
     
     def test_pickup_modify_no_target_property(self):
         """PickupModify trigger should not have TARGET property"""
         comp = Component("Test", 100)
         comp.PickupModify(0, item_id=11, factor=1.5, multiply=True)
-        assert ppt.TARGET not in comp.triggers[0]
+        assert ppt.Move.TARGET_ID not in comp.triggers[0]
 
 
 # ============================================================================
@@ -406,7 +404,7 @@ class TestRotateValidation:
         """Center defaults to target when not specified"""
         comp_with_target.Rotate(0, angle=45, t=1.0)
         trigger = comp_with_target.triggers[0]
-        assert trigger[ppt.ROTATE_CENTER] == 50
+        assert trigger[ppt.Rotate.CENTER_ID] == 50
 
     def test_rotate_restricted_center_rejected(self, comp_with_target: Component):
         with pytest.raises(ValueError) as exc:
@@ -428,7 +426,7 @@ class TestGroupContextManagement:
         """Triggers after set_context include context groups"""
         context_comp.set_context(groups=200, target=50)
         context_comp.Toggle(0, activateGroup=True)
-        assert 200 in context_comp.triggers[0][ppt.GROUPS]
+        assert 200 in context_comp.triggers[0][obj_prop.GROUPS]
 
     def test_end_context_removes_context_groups(self, context_comp: Component):
         """Triggers after clear_context exclude context groups"""
@@ -438,8 +436,8 @@ class TestGroupContextManagement:
         context_comp.set_context(target=51)
         context_comp.Toggle(0.1, activateGroup=True)
 
-        assert 200 in context_comp.triggers[0][ppt.GROUPS]
-        assert 200 not in context_comp.triggers[1][ppt.GROUPS]
+        assert 200 in context_comp.triggers[0][obj_prop.GROUPS]
+        assert 200 not in context_comp.triggers[1][obj_prop.GROUPS]
 
     def test_nested_context_overwrites(self, context_comp: Component):
         """Setting groups context while one is active overwrites it"""
@@ -448,29 +446,29 @@ class TestGroupContextManagement:
         context_comp.set_context(groups=300, target=51)
         context_comp.Toggle(0.1, activateGroup=True)
 
-        assert 200 in context_comp.triggers[0][ppt.GROUPS]
-        assert 200 not in context_comp.triggers[1][ppt.GROUPS]
-        assert 300 in context_comp.triggers[1][ppt.GROUPS]
+        assert 200 in context_comp.triggers[0][obj_prop.GROUPS]
+        assert 200 not in context_comp.triggers[1][obj_prop.GROUPS]
+        assert 300 in context_comp.triggers[1][obj_prop.GROUPS]
 
     def test_clear_context_is_idempotent(self, context_comp: Component):
         """Clearing context without setting is safe (idempotent)"""
         context_comp.clear_context(groups_only=True)
         context_comp.clear_context()
-        assert context_comp.groups == [context_comp.caller]
+        assert context_comp.groups == {context_comp.caller}
         assert context_comp.target == -1
 
     def test_context_with_multiple_groups(self, context_comp: Component):
         """Context can add multiple groups at once"""
         context_comp.set_context(groups=[200, 201, 202], target=50)
         context_comp.Toggle(0, activateGroup=True)
-        assert all(g in context_comp.triggers[0][ppt.GROUPS] for g in [200, 201, 202])
+        assert all(g in context_comp.triggers[0][obj_prop.GROUPS] for g in [200, 201, 202])
 
     def test_context_with_list_groups(self, context_comp: Component):
         """Context accepts list of groups"""
         context_comp.set_context(groups=[200, 201], target=50)
         context_comp.Toggle(0, activateGroup=True)
-        assert 200 in context_comp.triggers[0][ppt.GROUPS]
-        assert 201 in context_comp.triggers[0][ppt.GROUPS]
+        assert 200 in context_comp.triggers[0][obj_prop.GROUPS]
+        assert 201 in context_comp.triggers[0][obj_prop.GROUPS]
 
     def test_context_empty_rejected(self, context_comp: Component):
         """Setting context with no parameters is rejected"""
@@ -492,8 +490,8 @@ class TestTempContext:
             comp.Toggle(0.1, activateGroup=True)
 
         assert comp.target == 50
-        assert comp.triggers[0][ppt.TARGET] == 50
-        assert comp.triggers[1][ppt.TARGET] == 60
+        assert comp.triggers[0][ppt.Move.TARGET_ID] == 50
+        assert comp.triggers[1][ppt.Move.TARGET_ID] == 60
 
     def test_temp_context_restores_both(self):
         """temp_context can temporarily change both target and groups"""
@@ -504,7 +502,7 @@ class TestTempContext:
             comp.Toggle(0, activateGroup=True)
 
         assert comp.target == 50
-        assert comp.groups == [100, 200]
+        assert comp.groups == {100, 200}
 
     def test_temp_context_nesting(self):
         """temp_context supports nesting"""
@@ -517,11 +515,11 @@ class TestTempContext:
                 comp.Toggle(0.1, activateGroup=True)
             # After inner context: target=50, groups=300
             assert comp.target == 50
-            assert comp.groups == [100, 300]
+            assert comp.groups == {100, 300}
 
         # After outer context: fully restored
         assert comp.target == 50
-        assert comp.groups == [100, 200]
+        assert comp.groups == {100, 200}
 
     def test_temp_context_with_no_params(self):
         """temp_context with no params is a no-op but still works"""
@@ -772,12 +770,12 @@ class TestMethodChainingReturnsSelf:
 # ============================================================================
 
 class TestGeneralComponentFeatures:
-    def test_component_without_spawn_order_warning(self, comp_with_target: Component):
+    def test_component_without_spawn_order_warning(self, comp_with_target: Component, fake_level: Any):
         comp_with_target.Toggle(0, activateGroup=True)
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            lib.save_all(filename="testing")
+            lib.save_all(level=fake_level, live_editor=False)
 
         assert_warning(w, "spawn order", "Test")
 
@@ -794,7 +792,7 @@ class TestGetTriggersMethod:
         comp.Pickup(0, item_id=12, count=50, override=True)
         comp.Pickup(0, item_id=12, count=100, override=False)
 
-        result = comp.get_triggers({ppt.ITEM_ID: 12, ppt.PICKUP_COUNT: 50})
+        result = comp.get_triggers({ppt.Pickup.ITEM_ID: 12, ppt.Pickup.COUNT: 50})
         assert len(result) == 1
 
     def test_get_triggers_wildcard_any(self):
@@ -802,7 +800,7 @@ class TestGetTriggersMethod:
         comp.Pickup(0, item_id=11, count=123, override=True)
         comp.PickupModify(0, item_id=11, factor=1.45, multiply=True)
 
-        result = comp.get_triggers({ppt.PICKUP_MULTIPLY_DIVIDE: Any})
+        result = comp.get_triggers({ppt.Pickup.MODE: Any})
         assert len(result) == 2
 
     def test_get_triggers_by_object_id(self):
@@ -812,13 +810,13 @@ class TestGetTriggersMethod:
         comp.Toggle(0, activateGroup=True)
         comp.clear_context()
 
-        result = comp.get_triggers({ppt.OBJ_ID: obj_id.Trigger.PICKUP})
+        result = comp.get_triggers({obj_prop.ID: obj_id.Trigger.PICKUP})
         assert len(result) == 1
 
     def test_get_triggers_no_match(self):
         comp = Component("Test", 100, 5)
         comp.Pickup(0, item_id=12, count=50, override=True)
-        assert len(comp.get_triggers({ppt.ITEM_ID: 999})) == 0
+        assert len(comp.get_triggers({ppt.Pickup.ITEM_ID: 999})) == 0
 
 
 class TestHasTriggerPropertiesMethod:
@@ -826,14 +824,14 @@ class TestHasTriggerPropertiesMethod:
         comp = Component("Test", 100, 5)
         comp.Pickup(0, item_id=12, count=50, override=True)
 
-        assert comp.has_trigger_properties({ppt.ITEM_ID: 12, ppt.PICKUP_COUNT: 50}) is True
-        assert comp.has_trigger_properties({ppt.ITEM_ID: 12, ppt.PICKUP_COUNT: 999}) is False
+        assert comp.has_trigger_properties({ppt.Pickup.ITEM_ID: 12, ppt.Pickup.COUNT: 50}) is True
+        assert comp.has_trigger_properties({ppt.Pickup.ITEM_ID: 12, ppt.Pickup.COUNT: 999}) is False
 
     def test_has_trigger_properties_wildcard(self):
         comp = Component("Test", 100, 5)
         comp.PickupModify(0, item_id=11, factor=1.45, multiply=True)
 
-        assert comp.has_trigger_properties({ppt.PICKUP_MULTIPLY_DIVIDE: Any}) is True
+        assert comp.has_trigger_properties({ppt.Pickup.MODE: Any}) is True
 
     def test_has_trigger_properties_empty_dict_rejected(self):
         comp = Component("Test", 100, 5)
@@ -845,7 +843,7 @@ class TestHasTriggerPropertiesMethod:
         comp = Component("Test", 100, 5)
         comp.Pickup(0, item_id=12, count=50, override=True)
 
-        query = {ppt.ITEM_ID: 12}
+        query = {ppt.Pickup.ITEM_ID: 12}
         assert comp.has_trigger_properties(query) == (len(comp.get_triggers(query)) > 0)
 
 
@@ -980,13 +978,13 @@ class TestSpawnLimitEnforcement:
         # Both have remaps so Case 1 doesn't apply (only 1 unmapped allowed)
         layer_b = Component("LayerB", 200)
         layer_b.assert_spawn_order(True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="999.400")  # Has remap
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="998.400")  # Has remap
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={999: 400})  # Has remap
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={998: 400})  # Has remap
 
         # Layer A: Has remapped spawn trigger to B
         layer_a = Component("LayerA", 100)
         layer_a.assert_spawn_order(True)
-        layer_a.Spawn(0, 200, spawnOrdered=True, remap="997.200")
+        layer_a.Spawn(0, 200, spawnOrdered=True, remap={997: 200})
 
         with pytest.raises(RuntimeError) as exc_info:
             lib._enforce_spawn_limit([layer_a, layer_b, layer_c])
@@ -1005,7 +1003,7 @@ class TestSpawnLimitEnforcement:
 
         layer_a = Component("LayerA", 100)
         layer_a.assert_spawn_order(True)
-        layer_a.Spawn(0, 200, spawnOrdered=True, remap="999.200")
+        layer_a.Spawn(0, 200, spawnOrdered=True, remap={999: 200})
 
         # Should not raise (B has only 1 simultaneous spawn)
         lib._enforce_spawn_limit([layer_a, layer_b, layer_c])
@@ -1019,8 +1017,8 @@ class TestSpawnLimitEnforcement:
         # B has 2 simultaneous spawns but they have remaps
         layer_b = Component("LayerB", 200)
         layer_b.assert_spawn_order(True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="999.400")
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="998.400")
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={999: 400})
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={998: 400})
 
         # A has NO remap - so Case 2 shouldn't apply
         layer_a = Component("LayerA", 100)
@@ -1044,8 +1042,8 @@ class TestSpawnLimitEnforcement:
         # B has 2 simultaneous spawns WITH remaps (normally Case 1 wouldn't apply)
         layer_b = Component("LayerB", 200)
         layer_b.assert_spawn_order(True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="999.400")
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="998.400")
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={999: 400})
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={998: 400})
 
         with pytest.raises(RuntimeError) as exc_info:
             lib._enforce_spawn_limit([layer_b, layer_c])
@@ -1065,12 +1063,12 @@ class TestSpawnLimitEnforcement:
         # B has 2 spawns, but BOTH have reset_remap - they ignore A's remap
         layer_b = Component("LayerB", 200)
         layer_b.assert_spawn_order(True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="999.400", reset_remap=True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="998.400", reset_remap=True)
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={999: 400}, reset_remap=True)
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={998: 400}, reset_remap=True)
 
         layer_a = Component("LayerA", 100)
         layer_a.assert_spawn_order(True)
-        layer_a.Spawn(0, 200, spawnOrdered=True, remap="997.200")
+        layer_a.Spawn(0, 200, spawnOrdered=True, remap={997: 200})
 
         # Should not raise - all B triggers have reset_remap
         lib._enforce_spawn_limit([layer_a, layer_b, layer_c])
@@ -1088,12 +1086,12 @@ class TestSpawnLimitEnforcement:
         # B has 2 spawns, only 1 has reset_remap
         layer_b = Component("LayerB", 200)
         layer_b.assert_spawn_order(True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="999.400", reset_remap=True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="998.400")
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={999: 400}, reset_remap=True)
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={998: 400})
 
         layer_a = Component("LayerA", 100)
         layer_a.assert_spawn_order(True)
-        layer_a.Spawn(0, 200, spawnOrdered=True, remap="997.200")
+        layer_a.Spawn(0, 200, spawnOrdered=True, remap={997: 200})
 
         # Should not raise - only 1 trigger lacks reset_remap
         lib._enforce_spawn_limit([layer_a, layer_b, layer_c])
@@ -1109,20 +1107,20 @@ class TestSpawnLimitEnforcement:
         # B has 3 spawns, only 1 has reset_remap (2 without = violation)
         layer_b = Component("LayerB", 200)
         layer_b.assert_spawn_order(True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="999.400", reset_remap=True)
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="998.400")
-        layer_b.Spawn(0, 400, spawnOrdered=True, remap="997.400")
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={999: 400}, reset_remap=True)
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={998: 400})
+        layer_b.Spawn(0, 400, spawnOrdered=True, remap={997: 400})
 
         layer_a = Component("LayerA", 100)
         layer_a.assert_spawn_order(True)
-        layer_a.Spawn(0, 200, spawnOrdered=True, remap="996.200")
+        layer_a.Spawn(0, 200, spawnOrdered=True, remap={996: 200})
 
         with pytest.raises(RuntimeError) as exc_info:
             lib._enforce_spawn_limit([layer_a, layer_b, layer_c])
 
         assert_error(exc_info, "case 2", "reset_remap")
 
-    def test_integration_with_save_all_default_enabled(self):
+    def test_integration_with_save_all_default_enabled(self, fake_level: Any):
         """Test that save_all() calls _enforce_spawn_limit by default"""
         target = Component("Target", 200)
         target.assert_spawn_order(True)
@@ -1134,7 +1132,7 @@ class TestSpawnLimitEnforcement:
         caller.Spawn(0, 200, spawnOrdered=True)
 
         with pytest.raises(RuntimeError) as exc_info:
-            lib.save_all(filename="testing")
+            lib.save_all(level=fake_level, live_editor=False)
 
         assert_error(exc_info, "spawn limit")
 
@@ -1303,9 +1301,9 @@ class TestBezierMove:
             t=duration
         )
         
-        move_triggers = [t for t in comp.triggers if t.get(ppt.OBJ_ID) == obj_id.Trigger.MOVE]
-        total_dx = float(sum(t.get(ppt.MOVE_X, 0) for t in move_triggers))
-        total_dy = float(sum(t.get(ppt.MOVE_Y, 0) for t in move_triggers))
+        move_triggers = [t for t in comp.triggers if t.get(obj_prop.ID) == obj_id.Trigger.MOVE]
+        total_dx = float(sum(t.get(ppt.Move.MOVE_X, 0) for t in move_triggers))
+        total_dy = float(sum(t.get(ppt.Move.MOVE_Y, 0) for t in move_triggers))
         
         return total_dx, total_dy
     
@@ -1448,5 +1446,5 @@ class TestBezierMove:
         
         comp.timed.BezierMove(time=0, curve_label=CurveType.GENTLE_ARC, dx=100, dy=50, t=1.0)
         
-        move_triggers = [t for t in comp.triggers if t.get(ppt.OBJ_ID) == obj_id.Trigger.MOVE]
+        move_triggers = [t for t in comp.triggers if t.get(obj_prop.ID) == obj_id.Trigger.MOVE]
         assert len(move_triggers) >= 2, "BezierMove should generate at least 2 MoveBy triggers"

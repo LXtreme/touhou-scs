@@ -204,38 +204,51 @@ class Component:
         return self
 
     def _flatten_groups(self, *groups: int | set[int]) -> set[int]:
-        """Flattens nested groups into a single set of ints."""
-        result: set[int] = set()
-        for g in groups:
-            if isinstance(g, int):
-                result.add(g)
-            else:
-                result.update(self._flatten_groups(*g))
-        return result
+        """Flattens nested groups into a single set of ints. Raises on duplicates."""
+        seen: set[int] = set()
+
+        def walk(items: Any) -> None:
+            for g in items:
+                if isinstance(g, int):
+                    if g in seen:
+                        raise ValueError(f"Flatten Groups: Duplicate group {g} found!")
+                    seen.add(g)
+                else:
+                    walk(g)
+
+        walk(groups)
+        return seen
 
     @contextmanager
-    def temp_context(self, target: int | None = None, groups: int | set[int] | None = None):
+    def temp_context(self, target: int | None = None, groups: int | set[int] | None = None,
+        include_caller: bool = True):
         """Temporarily set_context, then restore previous state."""
         old_target = self.target
         old_groups = self.groups.copy()
 
         try:
-            self.set_context(target=target, groups=groups)
+            self.set_context(target=target, groups=groups, include_caller=include_caller)
             yield self
         finally:
             self.target = old_target
             self.groups = old_groups
 
     def set_context(self, *,
-        target: int | None = None, groups: int | set[int] | None = None):
-        """Set a context for trigger target and groups. Either or both can be set."""
+        target: int | None = None, groups: int | set[int] | None = None,
+        include_caller: bool = True):
+        """
+        Set a context for trigger target and groups. Either or both can be set.
+        include_caller=False makes triggers belong only to 'groups' (not spawned with the
+        component itself), e.g. branch groups spawned by an ItemCompare.
+        """
         if target is None and groups is None:
             raise ValueError("set_context: must provide target or groups")
         if target is not None:
             validate_params(targets=target)
             self.target = target
         if groups is not None:
-            self.groups = {self.caller} | self._flatten_groups(groups)
+            flat = self._flatten_groups(groups)
+            self.groups = ({self.caller} | flat) if include_caller else flat
 
         return self
 
@@ -621,7 +634,6 @@ class Component:
         trigger[ppt.MULTI_TRIGGER] = True
         self.triggers.append(trigger) # type: ignore
 
-        del trigger[ppt.Move.TARGET_ID] # type: ignore
         trigger[ppt.Pickup.ITEM_ID] = item_id
         trigger[ppt.Pickup.MODE] = mode
         trigger[ppt.Pickup.MOD] = factor
