@@ -187,17 +187,20 @@ class Component:
             raise ValueError("has_trigger_properties: empty trigger dict given")
         return bool(self.get_triggers(trigger))
 
-    def create_trigger(self, obj_id: int, x: float, target: int) -> GenericObj:
-        """Appends automatically to component trigger list."""
-        t: GenericObj = new_obj(obj_id) # type: ignore
-        t[obj_prop.X] = x
-        t[ppt.Move.TARGET_ID] = target
-        t[obj_prop.GROUPS] = self.groups
-        t[obj_prop.EDITOR_L1] = self.editorLayer
-        t[ppt.SPAWN_TRIGGER] = True
-        t[ppt.MULTI_TRIGGER] = True
-        self.triggers.append(t)
-        return t
+    def _register_trigger(self, trigger: GenericObj, x: float) -> GenericObj:
+        """Stamp component-level properties onto a trigger and append it. Returns the trigger."""
+        trigger[obj_prop.X] = x
+        trigger[obj_prop.GROUPS] = set(self.groups) # copy: don't share one set across triggers
+        trigger[obj_prop.EDITOR_L1] = self.editorLayer
+        trigger[ppt.SPAWN_TRIGGER] = True
+        trigger[ppt.MULTI_TRIGGER] = True
+        self.triggers.append(trigger)
+        return trigger
+
+    def create_trigger(self, obj_id: int, x: float) -> GenericObj:
+        """Create a trigger, register it with the component, and return it.
+        Target fields are NOT set: assign the trigger-specific target (a51 etc.) at the call site."""
+        return self._register_trigger(new_obj(obj_id), x) # type: ignore
 
     def assert_spawn_order(self, required: bool):
         self.requireSpawnOrder = required
@@ -279,7 +282,9 @@ class Component:
         target = target.caller if isinstance(target, Component) else target
         validate_params(targets=target, non_negative=delay)
 
-        trigger = self.create_trigger(obj_id.Trigger.SPAWN, util.time_to_dist(time), target)
+        trigger = self.create_trigger(obj_id.Trigger.SPAWN, util.time_to_dist(time))
+
+        trigger[ppt.Spawn.TARGET_ID] = target
 
         if spawnOrdered: trigger[ppt.Spawn.ORDERED] = True
         if delay > 0: trigger[ppt.Spawn.DELAY] = delay
@@ -297,7 +302,9 @@ class Component:
         """
         validate_params(targets=self.target)
 
-        trigger = self.create_trigger(obj_id.Trigger.TOGGLE, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.TOGGLE, util.time_to_dist(time))
+
+        trigger[ppt.Toggle.TARGET_ID] = self.target
         trigger[ppt.Toggle.ACTIVATE_GROUP] = activateGroup
 
         return self
@@ -309,7 +316,9 @@ class Component:
         validate_params(targets=[self.target, targetDir], non_negative=t, type=type, rate=rate)
         enforce_solid_groups(self.target)
 
-        trigger = self.create_trigger(obj_id.Trigger.MOVE, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.MOVE, util.time_to_dist(time))
+
+        trigger[ppt.Move.TARGET_ID] = self.target
 
         trigger[ppt.Move.DURATION] = t
         trigger[ppt.Move.DIRECTION_MODE] = True
@@ -330,7 +339,9 @@ class Component:
         validate_params(non_negative=[fadeIn, t, fadeOut], targets=self.target)
         enforce_solid_groups(self.target)
 
-        trigger = self.create_trigger(obj_id.Trigger.PULSE, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.PULSE, util.time_to_dist(time))
+
+        trigger[ppt.Pulse.TARGET_ID] = self.target
         
         converted = HSV()
         converted.hue = hsb.h
@@ -355,7 +366,9 @@ class Component:
         validate_params(targets=self.target, non_negative=t, type=type, rate=rate)
         enforce_solid_groups(self.target)
 
-        trigger = self.create_trigger(obj_id.Trigger.MOVE, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.MOVE, util.time_to_dist(time))
+
+        trigger[ppt.Move.TARGET_ID] = self.target
 
         trigger[ppt.Move.DURATION] = t
         trigger[ppt.Move.MOVE_X] = dx
@@ -373,7 +386,9 @@ class Component:
         validate_params(targets=[self.target, location], non_negative=t, type=type, rate=rate)
         enforce_solid_groups(self.target, location)
 
-        trigger = self.create_trigger(obj_id.Trigger.MOVE, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.MOVE, util.time_to_dist(time))
+
+        trigger[ppt.Move.TARGET_ID] = self.target
 
         trigger[ppt.Move.TARGET_CENTER_ID] = self.target
         trigger[ppt.Move.TARGET_POS] = location
@@ -407,7 +422,9 @@ class Component:
         validate_params(targets=[self.target, center], non_negative=t, type=type, rate=rate)
         enforce_solid_groups(self.target)
 
-        trigger = self.create_trigger(obj_id.Trigger.ROTATE, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.ROTATE, util.time_to_dist(time))
+
+        trigger[ppt.Rotate.TARGET_ID] = self.target
 
         trigger[ppt.Rotate.CENTER_ID] = center
         trigger[ppt.Rotate.DEGREES] = angle
@@ -423,7 +440,9 @@ class Component:
         validate_params(targets=self.target, non_negative=t, type=type, rate=rate)
         enforce_solid_groups(self.target, targetDir)
 
-        trigger = self.create_trigger(obj_id.Trigger.ROTATE, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.ROTATE, util.time_to_dist(time))
+
+        trigger[ppt.Rotate.TARGET_ID] = self.target
 
         trigger[ppt.Rotate.AIM_TARGET_ID] = targetDir
         trigger[ppt.Rotate.CENTER_ID] = self.target
@@ -499,7 +518,9 @@ class Component:
             keyframe_group = new_keyframe_group.caller
             scale_keyframes[scale_settings] = new_keyframe_group
 
-        trigger = self.create_trigger(obj_id.Trigger.ANIMATE_KEYFRAME, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.ANIMATE_KEYFRAME, util.time_to_dist(time))
+
+        trigger[ppt.AnimateKeyframe.TARGET_ID] = self.target
 
         trigger[ppt.AnimateKeyframe.ANIMATION_ID] = keyframe_group
         trigger[ppt.AnimateKeyframe.TIME_MOD] = 1.0
@@ -517,7 +538,9 @@ class Component:
         validate_params(targets=self.target, non_negative=t)
         enforce_solid_groups(self.target, targetDir)
 
-        trigger = self.create_trigger(obj_id.Trigger.FOLLOW, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.FOLLOW, util.time_to_dist(time))
+
+        trigger[ppt.Follow.TARGET_ID] = self.target
 
         trigger[ppt.Follow.FOLLOW_TARGET] = targetDir
         trigger[ppt.Follow.MOD_X] = x_mod
@@ -533,7 +556,9 @@ class Component:
         if not (0 <= opacity <= 100):
             raise ValueError("Opacity must be between 0 and 100")
 
-        trigger = self.create_trigger(obj_id.Trigger.ALPHA, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.ALPHA, util.time_to_dist(time))
+
+        trigger[ppt.Alpha.TARGET_ID] = self.target
 
         trigger[ppt.Alpha.OPACITY] = opacity / 100.0
         trigger[ppt.Alpha.DURATION] = t
@@ -545,7 +570,9 @@ class Component:
         target = target.caller if isinstance(target, Component) else target
         validate_params(targets=target)
 
-        trigger = self.create_trigger(obj_id.Trigger.STOP, util.time_to_dist(time), target)
+        trigger = self.create_trigger(obj_id.Trigger.STOP, util.time_to_dist(time))
+
+        trigger[ppt.Stop.TARGET_ID] = target
 
         trigger[ppt.Stop.MODE] = option # 0=Stop, 1=Pause, 2=Resume
         trigger[ppt.Stop.USE_CONTROL_ID] = useControlID
@@ -570,7 +597,9 @@ class Component:
         blockA: int, blockB: int, activateGroup: bool, onExit: bool = False):
         validate_params(targets=self.target)
 
-        trigger = self.create_trigger(obj_id.Trigger.COLLISION, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.COLLISION, util.time_to_dist(time))
+
+        trigger[ppt.Collision.TARGET_ID] = self.target
 
         trigger[ppt.Collision.BLOCK_A] = blockA
         trigger[ppt.Collision.BLOCK_B] = blockB
@@ -582,7 +611,9 @@ class Component:
     def Count(self, time: float, *, item_id: int, count: int, activateGroup: bool, multiActivate: bool = True):
         validate_params(targets=self.target, item_id=item_id)
 
-        trigger = self.create_trigger(obj_id.Trigger.COUNT, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.COUNT, util.time_to_dist(time))
+
+        trigger[ppt.Count.TARGET_ID] = self.target
 
         trigger[ppt.Count.ITEM_ID] = item_id
         trigger[ppt.Count.COUNT] = count
@@ -597,14 +628,7 @@ class Component:
 
         if count == 0: raise ValueError("Pickup: Count is 0 (no change)")
 
-        # substituting self.create_trigger bc cant set a51 (pickup has no target field)
-        trigger = new_obj(obj_id.Trigger.PICKUP)
-        trigger[obj_prop.X] = util.time_to_dist(time)
-        trigger[obj_prop.GROUPS] = self.groups
-        trigger[obj_prop.EDITOR_L1] = self.editorLayer
-        trigger[ppt.SPAWN_TRIGGER] = True
-        trigger[ppt.MULTI_TRIGGER] = True
-        self.triggers.append(trigger) # type: ignore
+        trigger = self.create_trigger(obj_id.Trigger.PICKUP, util.time_to_dist(time))
 
         trigger[ppt.Pickup.ITEM_ID] = item_id
         trigger[ppt.Pickup.COUNT] = count
@@ -625,14 +649,7 @@ class Component:
 
         mode = 1 if multiply else 2 # multiply=1, divide=2
 
-        # substituting self.create_trigger bc cant set a51 (pickup has no target field)
-        trigger = new_obj(obj_id.Trigger.PICKUP)
-        trigger[obj_prop.X] = util.time_to_dist(time)
-        trigger[obj_prop.GROUPS] = self.groups
-        trigger[obj_prop.EDITOR_L1] = self.editorLayer
-        trigger[ppt.SPAWN_TRIGGER] = True
-        trigger[ppt.MULTI_TRIGGER] = True
-        self.triggers.append(trigger) # type: ignore
+        trigger = self.create_trigger(obj_id.Trigger.PICKUP, util.time_to_dist(time))
 
         trigger[ppt.Pickup.ITEM_ID] = item_id
         trigger[ppt.Pickup.MODE] = mode
@@ -644,7 +661,8 @@ class Component:
         start: float, end: float, mod: float = 1, start_paused: bool = False):
         """Activate a time trigger that counts down from 'duration' seconds."""
         validate_params(item_id=item)
-        trigger = self.create_trigger(obj_id.Trigger.TIME, util.time_to_dist(time), self.target)
+        trigger = self.create_trigger(obj_id.Trigger.TIME, util.time_to_dist(time))
+        trigger[ppt.Time.TARGET_ID] = self.target
 
         trigger[ppt.Time.ITEM_ID] = item
         trigger[ppt.Time.START_TIME] = start
@@ -656,16 +674,9 @@ class Component:
 
     def _time_control(self, time: float, item: int, stop: bool):
         validate_params(item_id=item)
-        self.triggers.append(GenericObj({
-            obj_prop.ID: obj_id.Trigger.TIME_CONTROL,
-            obj_prop.X: util.time_to_dist(time),
-            obj_prop.GROUPS: self.groups,
-            obj_prop.EDITOR_L1: self.editorLayer,
-            ppt.SPAWN_TRIGGER: True,
-            ppt.MULTI_TRIGGER: True,
-            ppt.TimeControl.ITEM_ID: item,
-            ppt.TimeControl.STOP: stop,
-        }))
+        trigger = self.create_trigger(obj_id.Trigger.TIME_CONTROL, util.time_to_dist(time))
+        trigger[ppt.TimeControl.ITEM_ID] = item
+        trigger[ppt.TimeControl.STOP] = stop
         return self
     
     def TimerStart(self, time: float, *, item: int):
@@ -686,7 +697,8 @@ class Component:
         sign as 'None' removes 'target' from the right side
         """
         validate_params(item_id=item)
-        trigger = self.create_trigger(obj_id.Trigger.ITEM_EDIT, util.time_to_dist(time), item)
+        trigger = self.create_trigger(obj_id.Trigger.ITEM_EDIT, util.time_to_dist(time))
+        trigger[ppt.ItemEdit.TARGET_ITEM_ID] = item
         
         trigger[ppt.ItemEdit.TARGET_ITEM_TYPE] = enum.Item.ItemType.TIMER.value # type for target
         trigger[ppt.ItemEdit.MOD] = mod
@@ -694,23 +706,16 @@ class Component:
         
         return self
 
+    def TriggerFromObj(self, time: float, trigger: GenericObj):
+        """Add a trigger from an object and automatically set it up for the component.
+        Takes ownership of 'trigger' (it is modified in place, not copied)."""
+        if obj_prop.Y in trigger: del trigger[obj_prop.Y]
+        self._register_trigger(trigger, util.time_to_dist(time))
+        return self
+
     def TriggerFromStr(self, time: float, string: str):
         """Add a trigger from an object string and automatically set it up for the component"""
-
-        trigger: GenericObj = from_object_string(string) # type: ignore
-        if obj_prop.Y in trigger: del trigger[obj_prop.Y]
-        
-        if "a51" in trigger and self.target == -1:
-            raise RuntimeError("TriggerFromStr: Trigger has a target field but a target is not selected")
-
-        trigger[obj_prop.X] = util.time_to_dist(time)
-        trigger[obj_prop.GROUPS] = self.groups
-        trigger[obj_prop.EDITOR_L1] = self.editorLayer
-        trigger[ppt.SPAWN_TRIGGER] = True
-        trigger[ppt.MULTI_TRIGGER] = True
-        self.triggers.append(trigger)
-
-        return self
+        return self.TriggerFromObj(time, from_object_string(string)) # type: ignore
 
 
 # ===========================================================
