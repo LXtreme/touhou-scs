@@ -18,7 +18,7 @@ from touhou_scs import enums as enum, lib, utils as util
 from touhou_scs.utils import unknown_g, warn
 from touhou_scs.types import GenericObj
 
-from gmdbuilder import from_object_string, new_obj, obj_id, obj_prop
+from gmdbuilder import ObjectType, from_object_string, new_obj, obj_id, obj_prop
 
 ppt = obj_prop.Trigger
 
@@ -706,16 +706,16 @@ class Component:
         
         return self
 
-    def TriggerFromObj(self, time: float, trigger: GenericObj):
+    def TriggerFromObj(self, time: float, trigger: GenericObj | ObjectType):
         """Add a trigger from an object and automatically set it up for the component.
         Takes ownership of 'trigger' (it is modified in place, not copied)."""
         if obj_prop.Y in trigger: del trigger[obj_prop.Y]
-        self._register_trigger(trigger, util.time_to_dist(time))
+        self._register_trigger(trigger, util.time_to_dist(time)) # type: ignore
         return self
 
     def TriggerFromStr(self, time: float, string: str):
         """Add a trigger from an object string and automatically set it up for the component"""
-        return self.TriggerFromObj(time, from_object_string(string)) # type: ignore
+        return self.TriggerFromObj(time, from_object_string(string))
 
 
 # ===========================================================

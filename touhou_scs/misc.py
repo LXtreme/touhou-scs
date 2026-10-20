@@ -2,6 +2,7 @@
 from collections.abc import Iterator
 
 from gmdbuilder import from_object_string, obj_id, obj_prop
+from gmdbuilder.classes import ItemCompare
 from touhou_scs import enums as enum, lib, utils as util
 from touhou_scs.component import Component, Multitarget
 from touhou_scs.utils import calltracker, unknown_g
@@ -93,11 +94,13 @@ def add_plr_collisions():
         for bullet_hitbox in range(bullet.min_group, bullet.max_group + 1):
             bullet_col = bullet_hitbox + (bullet.max_group - bullet.min_group + 1)
             # permanently turns on all collisions for each bullet (level calls it on startup)
-            global_col_spawn = global_col.create_trigger(obj_id.Trigger.SPAWN, 0, cols.caller)
+            global_col_spawn = global_col.create_trigger(obj_id.Trigger.SPAWN, 0)
+            global_col_spawn[ppt.Spawn.TARGET_ID] = cols.caller
             global_col_spawn[ppt.Spawn.REMAPS] = { enum.EMPTY_BULLET: bullet_hitbox }
             # Give each bullet a spawn trigger that activates its own collisions
             with plr_hit_col.temp_context(groups={bullet_hitbox, bullet_col}):
-                plr_hit_col_spawn = plr_hit_col.create_trigger(obj_id.Trigger.SPAWN, 0, PLR_HURT_FUNCTION)
+                plr_hit_col_spawn = plr_hit_col.create_trigger(obj_id.Trigger.SPAWN, 0)
+                plr_hit_col_spawn[ppt.Spawn.TARGET_ID] = PLR_HURT_FUNCTION
                 plr_hit_col_spawn[ppt.Spawn.REMAPS] = { enum.EMPTY_BULLET: bullet_hitbox }
 
     # DO NOT use the bullet pool registry because that includes pickups
@@ -152,7 +155,8 @@ def add_enemy_collisions():
     boundary_spawner = Component("PlrBullet Boundary Exit remap wrappers", GLOBAL_COLLISIONS, editorLayer=4) \
         .assert_spawn_order(False)
     for bg in all_bullet_groups:
-        t = boundary_spawner.create_trigger(obj_id.Trigger.SPAWN, 0, plr_bullet_boundary_col.caller)
+        t = boundary_spawner.create_trigger(obj_id.Trigger.SPAWN, 0)
+        t[ppt.Spawn.TARGET_ID] = plr_bullet_boundary_col.caller
         t[ppt.Spawn.REMAPS] = {enum.EMPTY_BULLET: bg}
 
     # ── Enemy-hit collisions ──────────────────────────────────────────────────
@@ -237,7 +241,39 @@ def add_pickup_collisions():
         raise RuntimeError("Pickup collisions have already been added")
 
     PLR_SCREEN_BOUNDARY = 6 # the player's outer hitbox primarily for boundary collisions
+
+    POWER_STEP = 0.05
+    POWER_MAX = 4.00
+    SCORE_PER_PICKUP = 100
+    TOLERANCE = 0.001 # power is a float timer; absorbs accumulated 0.05-step error
+
+    # compare power >= 4.0
+    # ├ true  (already_max_g): score += power * 200
+    # └ false (not_max_g): compare 2: (power + 0.05) >= 4.0 (tol 0.001)
+    #     ├ true  (reach_max_g): power = 4.0, spawn power_up_logic
+    #     └ false (add_power_g): power += 0.05, score += power * 100
+    already_max_g = unknown_g()
+    not_max_g = unknown_g()
+    reach_max_g = unknown_g()
+    add_power_g = unknown_g()
     
+    is_full_power = ItemCompare()
+    is_full_power.set_from_string(f"t{enum.POWER_LEVEL} >= {POWER_MAX:.2f}")
+    is_full_power.true_id = already_max_g
+    is_full_power.false_id = not_max_g
+
+    will_be_full_power = ItemCompare()
+    will_be_full_power.set_from_string(f"t{enum.POWER_LEVEL} + {POWER_STEP} >= {POWER_MAX:.2f}")
+    will_be_full_power.tolerance = TOLERANCE
+    will_be_full_power.true_id = reach_max_g
+    will_be_full_power.false_id = add_power_g
+
+    full_power = (Component("Full Power", unknown_g(), editorLayer=6)
+        .assert_spawn_order(True)
+        # TODO: sfx + power up visuals
+        .Pickup(0, item_id=enum.SCORE, count=SCORE_PER_PICKUP, override=False)
+    )
+
     on_p_pickup = (Component("On P Pickup Collision", unknown_g(), editorLayer=6)
         .assert_spawn_order(True)
         .set_context(target=enum.EMPTY_BULLET)
@@ -247,7 +283,18 @@ def add_pickup_collisions():
             .Alpha(0.3, t=0, opacity=100)
             .Toggle(0.3, False)
         .clear_context()
-        .TimerOp(0.3, item=enum.POWER_LEVEL, sign=enum.Item.MathOp.ADD, mod=0.05)
+        .TriggerFromObj(0.3, is_full_power.obj)
+        .set_context(groups=already_max_g, include_caller=False)
+            .Pickup(0, item_id=enum.SCORE, count=SCORE_PER_PICKUP * 2, override=False)
+        .set_context(groups=not_max_g, include_caller=False)
+            .TriggerFromObj(0, will_be_full_power.obj)
+        .set_context(groups=reach_max_g, include_caller=False)
+            .TimerOp(0, item=enum.POWER_LEVEL, mod=POWER_MAX) # snap to max
+            .Spawn(0, full_power, True)
+        .set_context(groups=add_power_g, include_caller=False)
+            .TimerOp(0, item=enum.POWER_LEVEL, sign=enum.Item.MathOp.ADD, mod=POWER_STEP)
+            .Pickup(0, item_id=enum.SCORE, count=SCORE_PER_PICKUP, override=False)
+        .clear_context()
     )
     
     on_b_pickup = (Component("On B Pickup Collision", unknown_g(), editorLayer=6)
