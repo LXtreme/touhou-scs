@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from gmdbuilder.object_types import EASING, STOP_MODE
-from gmdkit.models.prop.hsv import HSV
+from gmdkit.models.prop.color import HSV
 
 from touhou_scs.movements import CurveType, apply_bezier_movement
 from touhou_scs import enums as enum, lib, utils as util

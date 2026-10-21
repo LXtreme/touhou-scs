@@ -5,7 +5,7 @@ if __name__ != "__main__":
     print("Don't import this! exiting.")
     exit()
 
-level = Level.from_live_editor()
+level = Level.from_file("touhou scs.gdlvl")
 # level.export_to_live_editor()
 init_level(level)
 
@@ -220,4 +220,4 @@ add_pickup_collisions()
 
 BulletAlloc.resolve()
 
-save_all(level=level)
+save_all(level=level, live_editor=False)
