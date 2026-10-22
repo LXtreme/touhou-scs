@@ -208,7 +208,7 @@ for i in range(CHAIN_SIZE):
 for i, (g, comp) in enumerate(chain_enemies):
     t0 = 1.0 + i * CHAIN_OFFSET
     yinyang.spawn_enemy(Stage.stage1, t0, comp, 10, (g,),
-        drops=[(lib.score_pickup, randint(5,13)), (lib.p_pickup, randint(2,6))])
+        drops=[(lib.score_pickup, randint(5,13)), (lib.p_pickup, randint(10,20))])
 
 
 Stage.stage1.Spawn(0, pos_setup.caller, True)

@@ -23,8 +23,7 @@ init_level(types.SimpleNamespace(  # type: ignore[arg-type]
 
 from touhou_scs import lib  # type: ignore noqa: E402,F401  (must come before component)
 
-import pytest  # noqa: E402
-
+import pytest
 
 @pytest.fixture
 def fake_level():

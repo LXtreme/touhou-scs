@@ -246,16 +246,23 @@ def add_pickup_collisions():
     POWER_MAX = 4.00
     SCORE_PER_PICKUP = 100
     TOLERANCE = 0.001 # power is a float timer; absorbs accumulated 0.05-step error
+    CROSS_EPS = 0.001 # same idea, baked into both sides of the whole-number compare
+    POWER_UP_SFX = "1,3602,62,1,87,1,36,1,392,5920,404,12,406,0.38,421,1,422,0.5,10,0.5,433,1,490,1.148,598,0.01;"
+    MAX_POWER_SFX = "1,3602,62,1,87,1,36,1,392,5920,404,8,405,6,406,0.49,421,1,422,0.5,10,0.5,433,1,490,1.447,598,0.01;"
 
     # compare power >= 4.0
     # ├ true  (already_max_g): score += power * 200
     # └ false (not_max_g): compare 2: (power + 0.05) >= 4.0 (tol 0.001)
     #     ├ true  (reach_max_g): power = 4.0, spawn power_up_logic
-    #     └ false (add_power_g): power += 0.05, score += power * 100
+    #     └ false (cross_check_g): compare 3: floor(power + eps) < floor(power + 0.05 + eps)
+    #         ├ true  (level_up_g): power += 0.05, score += 100, sfx
+    #         └ false (plain_add_g): power += 0.05, score += 100
     already_max_g = unknown_g()
     not_max_g = unknown_g()
     reach_max_g = unknown_g()
-    add_power_g = unknown_g()
+    cross_check_g = unknown_g()
+    level_up_g = unknown_g()
+    plain_add_g = unknown_g()
     
     is_full_power = ItemCompare()
     is_full_power.set_from_string(f"t{enum.POWER_LEVEL} >= {POWER_MAX:.2f}")
@@ -266,11 +273,18 @@ def add_pickup_collisions():
     will_be_full_power.set_from_string(f"t{enum.POWER_LEVEL} + {POWER_STEP} >= {POWER_MAX:.2f}")
     will_be_full_power.tolerance = TOLERANCE
     will_be_full_power.true_id = reach_max_g
-    will_be_full_power.false_id = add_power_g
+    will_be_full_power.false_id = cross_check_g
+
+    crosses_whole_number = ItemCompare()
+    crosses_whole_number.set_from_string(
+        f"floor(t{enum.POWER_LEVEL} + {CROSS_EPS:.3f}) < floor(t{enum.POWER_LEVEL} + {POWER_STEP + CROSS_EPS:.3f})")
+    crosses_whole_number.true_id = level_up_g
+    crosses_whole_number.false_id = plain_add_g
 
     full_power = (Component("Full Power", unknown_g(), editorLayer=6)
         .assert_spawn_order(True)
-        # TODO: sfx + power up visuals
+        # TODO: power up visuals
+        .TriggerFromStr(0, MAX_POWER_SFX)
         .Pickup(0, item_id=enum.SCORE, count=SCORE_PER_PICKUP, override=False)
     )
 
@@ -283,7 +297,7 @@ def add_pickup_collisions():
             .Alpha(0.3, t=0, opacity=100)
             .Toggle(0.3, False)
         .clear_context()
-        .TriggerFromObj(0.3, is_full_power.obj)
+        .TriggerFromObj(0, is_full_power.obj)
         .set_context(groups=already_max_g, include_caller=False)
             .Pickup(0, item_id=enum.SCORE, count=SCORE_PER_PICKUP * 2, override=False)
         .set_context(groups=not_max_g, include_caller=False)
@@ -291,7 +305,13 @@ def add_pickup_collisions():
         .set_context(groups=reach_max_g, include_caller=False)
             .TimerOp(0, item=enum.POWER_LEVEL, mod=POWER_MAX) # snap to max
             .Spawn(0, full_power, True)
-        .set_context(groups=add_power_g, include_caller=False)
+        .set_context(groups=cross_check_g, include_caller=False)
+            .TriggerFromObj(0, crosses_whole_number.obj)
+        .set_context(groups=level_up_g, include_caller=False)
+            .TimerOp(0, item=enum.POWER_LEVEL, sign=enum.Item.MathOp.ADD, mod=POWER_STEP)
+            .Pickup(0, item_id=enum.SCORE, count=SCORE_PER_PICKUP, override=False)
+            .TriggerFromStr(0, POWER_UP_SFX)
+        .set_context(groups=plain_add_g, include_caller=False)
             .TimerOp(0, item=enum.POWER_LEVEL, sign=enum.Item.MathOp.ADD, mod=POWER_STEP)
             .Pickup(0, item_id=enum.SCORE, count=SCORE_PER_PICKUP, override=False)
         .clear_context()
