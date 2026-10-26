@@ -205,9 +205,9 @@ bullet2 = BulletPool(1501, 2200, True)
 bullet3 = BulletPool(2901, 3600, False)
 bullet4 = BulletPool(4301, 4700, False)
 
-p_pickup = BulletPool(301, 330, True)
-b_pickup = BulletPool(331, 340, True)
-score_pickup = BulletPool(341, 450, True)
+p_pickup = BulletPool(301, 370, True)
+b_pickup = BulletPool(371, 380, True)
+score_pickup = BulletPool(381, 490, True)
 
 PICKUP_SPAWN_TIME = 0.2
 """Total time window (seconds) over which dropped pickups are spread on enemy death."""
