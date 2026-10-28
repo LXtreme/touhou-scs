@@ -1,6 +1,4 @@
  
-from collections.abc import Iterator
-
 from gmdbuilder import from_object_string, obj_id, obj_prop
 from gmdbuilder.classes import ItemCompare
 from touhou_scs import enums as enum, lib, utils as util
@@ -173,27 +171,23 @@ def add_enemy_collisions():
     )
 
     def add_bullet_enemy_collisions(bullet_groups: list[int], despawn: Component) -> None:
-        """Wire every bullet in bullet_groups to activate despawn when it hits any enemy."""
+        """Give each projectile its own remap origin for simultaneous hit callbacks."""
+        # Collision callbacks inherit their installation's remap origin. 
+        # Batching under one Multitarget origin causes spawn limiting edge case
+        # (e.g. if 2 bullets collide same tick)
+        
+        installer = Component(
+            f"{despawn.name}: Per-projectile Enemy Checks", unknown_g(), editorLayer=6
+        ).assert_spawn_order(False)
         for enemy in enemy_groups:
-            bullet_iter = iter(bullet_groups)
-            remaining   = len(bullet_groups)
+            installer.Spawn(0, base_col, False,
+                remap={enum.EMPTY_TARGET_GROUP: enemy})
 
-            def remap_cb(remap_pairs: dict[int, int], remap: util.Remap,
-                         _enemy: int = enemy, _iter: Iterator[int] = bullet_iter):
-                for source, target in remap_pairs.items():
-                    if source == enum.EMPTY_BULLET:
-                        remap.pair(target, next(_iter))
-                    elif source == enum.EMPTY_TARGET_GROUP:
-                        remap.pair(target, _enemy)
-                    elif source == enum.EMPTY1:
-                        remap.pair(target, despawn.caller)
-                    else:
-                        remap.pair(target, enum.EMPTY_MULTITARGET)
-
-            while remaining > 0:
-                batch_size = 64 if remaining > 127 else remaining
-                Multitarget.spawn_with_remap(global_col, 0, batch_size, base_col, remap_cb)
-                remaining -= batch_size
+        for bullet_group in bullet_groups:
+            global_col.Spawn(0, installer, False, remap={
+                enum.EMPTY_BULLET: bullet_group,
+                enum.EMPTY1: despawn.caller,
+            })
 
     for pool, despawn in PLAYER_SHOT_TYPES:
         bullet_groups = list(range(pool.min_group, pool.max_group + 1))
