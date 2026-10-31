@@ -17,6 +17,7 @@ from touhou_scs.movements import CurveType, apply_bezier_movement
 from touhou_scs import enums as enum, lib, utils as util
 from touhou_scs.utils import unknown_g, warn
 from touhou_scs.types import GenericObj
+from touhou_scs.comp_extra import RandomPatterns
 
 from gmdbuilder import ObjectType, from_object_string, new_obj, obj_id, obj_prop
 
@@ -152,6 +153,7 @@ class Component:
         self._pointer: Pointer | None = None
         self._instant: InstantPatterns | None = None
         self._timed: TimedPatterns | None = None
+        self._random: RandomPatterns | None = None
 
         lib.all_components.append(self)
 
@@ -169,6 +171,11 @@ class Component:
     def timed(self):
         if self._timed is None: self._timed = TimedPatterns(self)
         return self._timed
+
+    @property
+    def random(self) -> RandomPatterns:
+        if self._random is None: self._random = RandomPatterns(self)
+        return self._random
 
     def get_triggers(self, trigger: dict[str, Any]) -> list[GenericObj]:
         matches: list[GenericObj] = []

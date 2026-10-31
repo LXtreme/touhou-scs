@@ -13,11 +13,14 @@ Philosophy: Tests should expose logic bugs and verify validation.
 """
 
 import warnings
+import math
 import pytest
 from pytest import ExceptionInfo
 from touhou_scs.component import Component, Multitarget, BulletAlloc
 from touhou_scs import enums, lib
 from typing import Any
+from collections.abc import Iterable
+from touhou_scs.types import GenericObj
 from touhou_scs.movements import CurveType
 
 from gmdbuilder import obj_id
@@ -1402,7 +1405,7 @@ class TestBezierMove:
         (True, 0, 1.0, "nonexistent_curve", KeyError, ("not registered", "nonexistent_curve")),
     ])
     def test_bezier_move_validation_errors(self, set_target: bool, time: float, duration: float,
-                                          curve: str, exception_type: Exception, error_patterns: tuple[str,...]):
+                                          curve: str, exception_type: type[Exception], error_patterns: tuple[str,...]):
         """Test that BezierMove validates parameters and rejects invalid inputs."""
         
         comp = Component("BezierTest", 100)
@@ -1448,3 +1451,135 @@ class TestBezierMove:
         
         move_triggers = [t for t in comp.triggers if t.get(obj_prop.ID) == obj_id.Trigger.MOVE]
         assert len(move_triggers) >= 2, "BezierMove should generate at least 2 MoveBy triggers"
+
+
+class TestRandomPatterns:
+    """Execute emitted callback graphs to check arithmetic and ordering, not GD physics."""
+
+    class Graph:
+        def __init__(self, masks: Iterable[int] = ()):
+            self.timers: dict[int, float] = {38: 0.0}
+            self.rotations: list[tuple[int, int, float]] = []
+            self.masks = iter(masks)
+            self.bit = 0
+            self.mask = 0
+            self.groups: dict[int, list[GenericObj]] = {}
+            for comp in lib.all_components:
+                for trigger in comp.triggers:
+                    assert trigger['a1'] != obj_id.Trigger.SPAWN
+                    for group in trigger.get('a57', set[int]()):
+                        self.groups.setdefault(group, []).append(trigger)
+            for triggers in self.groups.values():
+                triggers.sort(key=lambda t: t['a2'])
+
+        def activate(self, group: int) -> None:
+            for trigger in self.groups.get(group, []):
+                self.execute(trigger)
+
+        def execute(self, t: GenericObj) -> None:
+            kind = t['a1']
+            if kind == obj_id.Trigger.RANDOM:
+                if self.bit == 0:
+                    self.mask = next(self.masks)
+                chosen = (self.mask >> self.bit) & 1
+                self.bit = (self.bit + 1) % 16
+                self.activate(t.get('a51' if chosen else 'a71', 0))
+            elif kind == obj_id.Trigger.ITEM_EDIT:
+                # TimerOp's existing constant assignment/arithmetic encoding.
+                value = self.timers.get(t['a51'], 0)
+                mod = t['a479']
+                op = t.get('a480', 0)
+                if op == 0: value = mod
+                elif op == 1: value += mod
+                elif op == 2: value -= mod
+                elif op == 3: value *= mod
+                elif op == 4: value /= mod
+                else: raise AssertionError(op)
+                self.timers[t['a51']] = value
+            elif kind == obj_id.Trigger.ITEM_COMPARE:
+                def operand(id_key: str, type_key: str, mod_key: str, op_key: str) -> float:
+                    value = self.timers.get(t.get(id_key, 0), 0) if t.get(type_key) == 2 else 0
+                    mod = t.get(mod_key, 1)
+                    op = t.get(op_key, 0)
+                    if op == 0: return mod
+                    if op == 3: return value * mod
+                    raise AssertionError(op)
+                left = operand('a80', 'a476', 'a479', 'a480')
+                right = operand('a95', 'a477', 'a483', 'a481')
+                op = t['a482']
+                result = {0: left == right, 2: left >= right, 3: left < right}[op]
+                self.activate(t.get('a51' if result else 'a71', 0))
+            elif kind == obj_id.Trigger.ROTATE:
+                self.rotations.append((t['a51'], t['a71'], t['a68']))
+            else:
+                raise AssertionError(kind)
+
+    def test_range_resets_between_synchronous_calls_and_supports_constant(self):
+        comp = Component("Random test", 4000).assert_spawn_order(True)
+        assert comp.random.rand_range(0, 1, 100) is comp
+        comp.random.rand_range(0, -50, 30)
+        comp.random.rand_range(0, 7, 7)
+        graph = self.Graph([65535, 0])
+        expected = [1 + 99 * 65535 / 65536, -50, 7]
+        for call, value in zip(comp.triggers, expected, strict=True):
+            graph.execute(call)
+            assert graph.timers[38] == value
+        assert len(lib.all_components) == 2
+
+    def test_converter_exhaustive_signed_whole_degrees(self):
+        comp = Component("Random test", 4000).set_context(target=4001)
+        comp.random.rotate(0, spread=0, center=4002)
+        entry = comp.random._rotation_entries[(4001, 4002)]
+        graph = self.Graph()
+        for quarter_degree in range(-1440, 1441):
+            angle = quarter_degree / 4
+            graph.timers[38] = angle
+            graph.rotations.clear()
+            graph.activate(entry)
+            assert sum(r[2] for r in graph.rotations) % 360 == math.floor(angle) % 360
+            assert all((target, center) == (4001, 4002) for target, center, _ in graph.rotations)
+
+    def test_random_rotate_end_to_end_and_reuses_only_fixed_target_bank(self):
+        comp = Component("Random test", 4000).assert_spawn_order(True).set_context(target=4001)
+        for _ in range(6):
+            assert comp.random.rotate(0, spread=40, offset=-10, center=4002) is comp
+        graph = self.Graph([0, 1, 32767, 32768, 65534, 65535])
+        for call, mask in zip(comp.triggers, [0, 1, 32767, 32768, 65534, 65535], strict=True):
+            graph.rotations.clear()
+            graph.execute(call)
+            expected = math.floor(-50 + 80 * mask / 65536)
+            assert sum(r[2] for r in graph.rotations) % 360 == expected % 360
+        rotates = [t for c in lib.all_components for t in c.triggers if t['a1'] == obj_id.Trigger.ROTATE]
+        assert len(rotates) == 9
+        assert len(lib.all_components) == 2
+
+    def test_context_gates_stay_on_call_and_order_survives_export_layout(self):
+        comp = Component("Random test", 4000).assert_spawn_order(True)
+        comp.set_context(target=4001, groups=147)
+        comp.random.rotate(1, spread=40, center=4002)
+        assert comp.triggers[0]['a57'] == {4000, 147}
+        assert comp.groups == {4000, 147} and comp.target == 4001
+        logic = comp.random._logic
+        assert logic is not None
+        assert all(4000 not in t['a57'] and 147 not in t['a57'] for t in logic.triggers)
+        lib._spread_triggers(logic.triggers, logic, lib.DEFAULT_TRIGGER_AREA, len(logic.triggers))
+        graph = self.Graph([0])
+        graph.execute(comp.triggers[0])
+        assert sum(r[2] for r in graph.rotations) % 360 == 320
+
+    @pytest.mark.parametrize("low,high", [(2, 1), (float('nan'), 2), (0, float('inf')), (-9_999_999, 9_999_999)])
+    def test_range_rejects_invalid_bounds(self, low: float, high: float):
+        comp = Component("Random test", 4000)
+        with pytest.raises(ValueError):
+            comp.random.rand_range(0, low, high)
+        assert not comp.triggers
+
+    def test_rotation_requires_target_and_rejects_unsupported_bounds(self):
+        comp = Component("Random test", 4000)
+        with pytest.raises(RuntimeError, match="target context"):
+            comp.random.rotate(0, spread=40)
+        comp.set_context(target=4001)
+        with pytest.raises(ValueError, match="non-negative"):
+            comp.random.rotate(0, spread=-1)
+        with pytest.raises(ValueError, match="angle bounds"):
+            comp.random.rotate(0, spread=361)
