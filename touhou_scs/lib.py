@@ -9,7 +9,7 @@ from itertools import cycle
 import random
 import time
 import colorsys
-from typing import Any, ClassVar, Self
+from typing import Any, Self
 
 from touhou_scs import enums as enum
 from touhou_scs import utils as util
@@ -215,11 +215,12 @@ PICKUP_SPAWN_TIME = 0.2
 
 class pointer:
     obj_count = 250
-    pointer_comp: ClassVar[Component] = Component("Pointers", 0, 11).assert_spawn_order(False)
-    pointers: ClassVar[list[int]] = [unknown_g() for _ in range(obj_count)]
-    _pointer_iter: ClassVar = cycle(pointers)
+    pointer_comp: Component = Component("Pointers", 0, 11).assert_spawn_order(False)
+    pointers: list[int] = [unknown_g() for _ in range(obj_count)]
+    _pointer_iter = cycle(pointers)
     
-    group_registry: ClassVar[dict[int, set[int]]] = { g: {enum.DEBUG_UI_GROUP, g} for g in pointers }
+    group_registry: dict[int, set[int]] = { g: {enum.DEBUG_UI_GROUP, g} for g in pointers }
+    parent_registry: dict[int, set[int]] = {}
     
     @classmethod
     def next(cls) -> int:
@@ -241,26 +242,27 @@ class pointer:
         """Call at export time to generate pointer objects with group mappings."""
         if cls.export_mappings.has_been_called:
             raise RuntimeError("Pointer.export_mappings has already been called")
-        for group_list in cls.group_registry.values():
-            # old pointer obj str: 1,3802,2,2625,3,915,20,2,57,7000.33,64,1,67,1,155,14905,25,9,24,11,128,0.25,129,0.25;
-            cls.pointer_comp.triggers.append({ #type: ignore
+        for pointer_group, group_list in cls.group_registry.items():
+            pointer_obj: GenericObj = {
                 obj_prop.ID: enum.POINTER_OBJ_ID,
                 obj_prop.X: 0.0, obj_prop.Y: 0.0,
                 obj_prop.GROUPS: group_list,
                 obj_prop.EDITOR_L1: 11,
-                obj_prop.OLD_SCALE: 0.2, #type: ignore
-                obj_prop.Z_LAYER: 9, # Z layer
+                obj_prop.OLD_SCALE: 0.2,
+                obj_prop.Z_LAYER: 9,
                 obj_prop.DONT_FADE: True, # dont fade
                 obj_prop.DONT_ENTER: True, # dont enter
-            })
+            }
+            if pointer_group in cls.parent_registry:
+                pointer_obj[obj_prop.PARENT_GROUPS] = cls.parent_registry[pointer_group]
+
+            cls.pointer_comp.triggers.append(pointer_obj)
+
 
 reimuA_level1 = BulletPool(6300, 6339, True)
 reimuA_homing_shots = BulletPool(6230, 6299, True)
 reimuA_bomb_balls = BulletPool(6200, 6229, True)
 reimuA_needles = BulletPool(6380, 6431, True)
-
-
-def get_all_components() -> list[ComponentProtocol]: return all_components
 
 class Stage:
     stage1 = Component("Stage1", unknown_g(), 9).assert_spawn_order(True)

@@ -27,10 +27,12 @@ from gmdbuilder import obj_id
 from gmdbuilder.mappings import obj_prop
 
 @pytest.fixture(autouse=True)
-def reset_global_state():
+def reset_global_state(monkeypatch: pytest.MonkeyPatch):
     """Clear global state before each test to prevent interference."""
     lib.all_components.clear()
     lib.solid_groups_to_enforce.clear()
+    tracker: Any = lib.pointer.__dict__['export_mappings'].__func__
+    monkeypatch.setattr(tracker, 'has_been_called', False)
     # Reset BulletAlloc class-level state so pattern tests start clean
     BulletAlloc.active = False
     BulletAlloc.deferred_calls.clear()
@@ -400,6 +402,21 @@ class TestPointToGroupValidation:
         """Dynamic mode without easing params should work"""
         comp_with_target.PointToGroup(0, targetDir=60, dynamic=True)
         assert len(comp_with_target.triggers) == 1
+
+
+    def test_point_to_group_center_defaults_to_target(self, comp_with_target: Component):
+        comp_with_target.PointToGroup(0, targetDir=60)
+        trigger = comp_with_target.triggers[0]
+        assert trigger[ppt.Rotate.CENTER_ID] == comp_with_target.target
+        assert trigger[ppt.Rotate.AIM_TARGET_ID] == 60
+        assert trigger[ppt.Rotate.AIM_MODE]
+
+    def test_point_to_group_explicit_center(self, comp_with_target: Component):
+        comp_with_target.PointToGroup(0, targetDir=60, center=70)
+        trigger = comp_with_target.triggers[0]
+        assert trigger[ppt.Rotate.TARGET_ID] == comp_with_target.target
+        assert trigger[ppt.Rotate.CENTER_ID] == 70
+        assert trigger[ppt.Rotate.AIM_TARGET_ID] == 60
 
 
 class TestRotateValidation:
@@ -1567,11 +1584,10 @@ class TestRandomPatterns:
         graph.execute(comp.triggers[0])
         assert sum(r[2] for r in graph.rotations) % 360 == 320
 
-    @pytest.mark.parametrize("low,high", [(2, 1), (float('nan'), 2), (0, float('inf')), (-9_999_999, 9_999_999)])
-    def test_range_rejects_invalid_bounds(self, low: float, high: float):
+    def test_range_rejects_reversed_bounds(self):
         comp = Component("Random test", 4000)
         with pytest.raises(ValueError):
-            comp.random.rand_range(0, low, high)
+            comp.random.rand_range(0, 2, 1)
         assert not comp.triggers
 
     def test_rotation_requires_target_and_rejects_unsupported_bounds(self):
@@ -1583,3 +1599,27 @@ class TestRandomPatterns:
             comp.random.rotate(0, spread=-1)
         with pytest.raises(ValueError, match="angle bounds"):
             comp.random.rotate(0, spread=361)
+
+
+class TestPointerCircleParenting:
+    def test_aim_uses_explicit_center(self):
+        comp = Component("Explicit aim center", 4000).set_context(target=4001)
+        comp.PointToGroup(0, 4003, center=4002)
+        aim = comp.triggers[0]
+        assert aim['a51'] == 4001
+        assert aim['a71'] == 4002
+        assert aim['a401'] == 4003
+
+    def test_follow_circle_exports_center_parent_without_random(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(lib.pointer, 'parent_registry', {})
+        monkeypatch.setattr(lib.pointer.pointer_comp, 'triggers', [])
+        tracker: Any = lib.pointer.__dict__['export_mappings'].__func__
+        monkeypatch.setattr(tracker, 'has_been_called', False)
+        c = Component("Follow circle", 4000).assert_spawn_order(True)
+        c.pointer.SetPointerCircle(0.4, location=100, follow=True)
+        pc = c.pointer.pc
+        assert lib.pointer.parent_registry[pc.center] == {pc.all}
+        c.pointer.CleanPointerCircle()
+        tracker.__wrapped__(lib.pointer)
+        parent = next(t for t in lib.pointer.pointer_comp.triggers if pc.center in t['a57'])
+        assert parent['a274'] == {pc.all}

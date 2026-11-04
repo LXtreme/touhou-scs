@@ -418,7 +418,7 @@ class Component:
             raise RuntimeError("SetPosition: Component must require spawn order.")
         
         self.GotoGroup(time, location=enum.GAME_BOTTOM_LEFT, t=0)
-        self.MoveBy(time * enum.TICK*2, dx=x, dy=y)
+        self.MoveBy(time + enum.TICK*2, dx=x, dy=y)
         return self
 
     def Rotate(self, time: float, *, angle: float, center: int | None = None,
@@ -440,18 +440,19 @@ class Component:
 
         return self
 
-    def PointToGroup(self, time: float, targetDir: int, *,
+    def PointToGroup(self, time: float, targetDir: int, *, center: int | None = None,
         t: float = 0, type: EASING = 0, rate: float = 1.0, dynamic: bool = False):
         """Point target towards another group"""
-        validate_params(targets=self.target, non_negative=t, type=type, rate=rate)
-        enforce_solid_groups(self.target, targetDir)
+        if center is None: center = self.target
+        validate_params(targets=[self.target, center], non_negative=t, type=type, rate=rate)
+        enforce_solid_groups(self.target, center, targetDir)
 
         trigger = self.create_trigger(obj_id.Trigger.ROTATE, util.time_to_dist(time))
 
         trigger[ppt.Rotate.TARGET_ID] = self.target
 
         trigger[ppt.Rotate.AIM_TARGET_ID] = targetDir
-        trigger[ppt.Rotate.CENTER_ID] = self.target
+        trigger[ppt.Rotate.CENTER_ID] = center
         trigger[ppt.Rotate.AIM_MODE] = True
         trigger[ppt.Rotate.DURATION] = t
         trigger[ppt.Rotate.EASING] = type
@@ -852,6 +853,7 @@ class Pointer:
 
         if follow:
             pc = lib.GuiderCircle(point=0, center=0, all_group=unknown_g())
+            lib.pointer.parent_registry.setdefault(pc.center, set()).add(pc.all)
         else:
             pc = lib.GuiderCircle(point=0, center=0, all_group=0)
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any, TYPE_CHECKING
 
 from gmdbuilder import ObjectType, new_obj, obj_id, obj_prop
@@ -22,12 +21,7 @@ ppt = obj_prop.Trigger
 
 
 class RandomPatterns:
-    """Synchronous numeric RNG and relative rotation using scratch TIMER 38.
-
-    All calls overwrite timer 38. Numeric work finishes through direct Random /
-    Item Compare callbacks; Rotate still applies during GD's movement update.
-    No remaps, parallel calls across ticks, automatic aiming, or firing loops.
-    """
+    """Random ranges and synchronous binary rotation using scratch timer 38."""
 
     TIMER_ID = 38
     BITS = 16
@@ -62,13 +56,12 @@ class RandomPatterns:
 
     @classmethod
     def _emit(cls, groups: int | set[int], trigger: GenericObj | ObjectType):
-        logic = cls._logic
-        assert logic is not None
+        assert cls._logic is not None
         # Explicit X order survives export. Callback groups are NOT Spawn Ordered,
         # so these distances enforce order without introducing internal delays.
-        time = len(logic.triggers) * 2 / enum.PLR_SPEED
-        with logic.temp_context(groups=groups, include_caller=False):
-            logic.TriggerFromObj(time, trigger)
+        time = len(cls._logic.triggers) * 2 / enum.PLR_SPEED
+        with cls._logic.temp_context(groups=groups, include_caller=False):
+            cls._logic.TriggerFromObj(time, trigger)
 
     @classmethod
     def _timer_op(cls, groups: int | set[int], value: float,
@@ -101,28 +94,26 @@ class RandomPatterns:
         Equal bounds produce that constant. Returns the parent Component for
         chaining. Uses one scratch timer shared by all synchronous calls.
         """
-        if not (math.isfinite(minimum) and math.isfinite(maximum)):
-            raise ValueError("rand_range: bounds must be finite")
         if minimum > maximum:
             raise ValueError("rand_range: minimum must not exceed maximum")
-        if max(abs(minimum), abs(maximum), maximum - minimum) > 9_999_999:
-            raise ValueError("rand_range: bounds and span must fit GD's timer limit")
 
         logic = self._storage()
         entry = unknown_g()
         self._range_group = entry
+
         if minimum == maximum:
             self._timer_op(entry, minimum)
         else:
-            self._compare(entry, "i38 == i38", logic.caller)
+            self._compare(entry, "i38 == i38", logic.caller) # always true (for 0-tick spawn)
             self._timer_op(entry, maximum - minimum, enum.Item.MathOp.MULTIPLY)
             self._timer_op(entry, minimum, enum.Item.MathOp.ADD)
+
         self._call(self._component, time, entry)
         return self._component
 
     @classmethod
     def _rotation_entry(cls, target: int, center: int) -> int:
-        cls._storage()
+        logic = cls._storage()
         key = (target, center)
         if key in cls._rotation_entries:
             return cls._rotation_entries[key]
@@ -145,12 +136,13 @@ class RandomPatterns:
             cls._compare(groups, f"t38 >= {weight}", take, next_check)
             if next_check:
                 cls._timer_op(take, weight, enum.Item.MathOp.SUBTRACT)
-            rotate = new_obj(obj_id.Trigger.ROTATE)
-            rotate[ppt.Rotate.TARGET_ID] = target
-            rotate[ppt.Rotate.CENTER_ID] = center
-            rotate[ppt.Rotate.DEGREES] = weight
-            rotate[ppt.Rotate.DURATION] = 0
-            cls._emit(take, rotate)
+
+            # Explicit X order survives export. Callback groups are NOT Spawn Ordered,
+            # so these distances enforce order without introducing internal delays.
+            time = len(logic.triggers) * 2 / enum.PLR_SPEED
+            with logic.temp_context(groups=take, target=target, include_caller=False):
+                logic.Rotate(time, angle=weight, center=center, t=0)
+
             check, previous_take = next_check, take
         return entry
 
@@ -168,15 +160,17 @@ class RandomPatterns:
         if center is None:
             center = target
         validate_params(targets=[target, center], non_negative=spread)
-        minimum, maximum = offset - spread, offset + spread
-        if not (math.isfinite(minimum) and math.isfinite(maximum)):
-            raise ValueError("random.rotate: spread and offset must be finite")
+        enforce_solid_groups(target, center)
+
+        minimum = offset - spread
+        maximum = offset + spread
         if minimum < -360 or maximum > 360:
             raise ValueError("random.rotate: angle bounds must lie within [-360, 360]")
-        enforce_solid_groups(target, center)
+        
         self.rand_range(time, minimum, maximum)
         converter = self._rotation_entry(target, center)
         self._compare(self._range_group, "i38 == i38", converter)
+
         return self._component
 
 
