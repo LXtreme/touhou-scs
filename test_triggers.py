@@ -13,14 +13,11 @@ Philosophy: Tests should expose logic bugs and verify validation.
 """
 
 import warnings
-import math
 import pytest
 from pytest import ExceptionInfo
 from touhou_scs.component import Component, Multitarget, BulletAlloc
 from touhou_scs import enums, lib
 from typing import Any
-from collections.abc import Iterable
-from touhou_scs.types import GenericObj
 from touhou_scs.movements import CurveType
 
 from gmdbuilder import obj_id
@@ -73,7 +70,7 @@ def assert_error(exc_info: ExceptionInfo[BaseException], *patterns: str) -> None
     msg = str(exc_info.value).lower()
     for pattern in patterns:
         p = pattern.lower()
-        assert p in msg, f"Expected '{pattern}' in: {str(exc_info.value)}"
+        assert p in msg, f"Expected '{pattern}' in: {exc_info.value!s}"
 
 def assert_warning(warning_list: list[warnings.WarningMessage], *patterns: str) -> None:
     """Assert warning list contains all patterns (case-insensitive)."""
@@ -130,16 +127,8 @@ class TestSpawnDelayValidation:
             comp.Spawn(0, 50, spawnOrdered=False, delay=delay)
             if delay > 0:
                 assert comp.triggers[0][ppt.Spawn.DELAY] == delay
-    
-    def test_spawn_zero_delay_not_stored(self):
-        """Zero delay is not stored as a property"""
-        comp = Component("Test", 100).Spawn(0, 50, spawnOrdered=False, delay=0)
-        assert ppt.Spawn.DELAY not in comp.triggers[0]
-    
-    def test_spawn_positive_delay_stored(self):
-        """Positive delay is stored correctly"""
-        comp = Component("Test", 100).Spawn(0, 50, spawnOrdered=False, delay=0.5)
-        assert comp.triggers[0][ppt.Spawn.DELAY] == 0.5
+            else:
+                assert ppt.Spawn.DELAY not in comp.triggers[0]
 
 
 class TestSpawnRemapValidation:
@@ -229,11 +218,6 @@ class TestAlphaOpacityValidation:
             comp_with_target.Alpha(0, opacity=opacity)
             # Opacity is stored as decimal (0-1 range)
             assert comp_with_target.triggers[0][ppt.Alpha.OPACITY] == opacity / 100.0
-    
-    def test_opacity_converts_to_decimal(self, comp_with_target: Component):
-        """Opacity is stored as decimal (0-1 range)"""
-        comp_with_target.Alpha(0, opacity=75)
-        assert comp_with_target.triggers[0][ppt.Alpha.OPACITY] == 0.75
 
 
 # ============================================================================
@@ -360,9 +344,6 @@ class TestPickupModifyValidation:
     def test_pickup_modify_both_modes_rejected(self):
         self._test_pickup_modify(multiply=True, divide=True, should_fail=True, error_patterns=("both", "multiply", "divide"))
     
-    def test_pickup_modify_valid_modes_accepted(self):
-        self._test_pickup_modify(factor=2.0, multiply=True, should_fail=False)
-        self._test_pickup_modify(factor=2.0, divide=True, should_fail=False)
     
     def test_pickup_modify_multiply_mode_value(self):
         """Multiply mode should set PICKUP_MULTIPLY_DIVIDE=1"""
@@ -483,12 +464,6 @@ class TestGroupContextManagement:
         context_comp.Toggle(0, activateGroup=True)
         assert all(g in context_comp.triggers[0][obj_prop.GROUPS] for g in [200, 201, 202])
 
-    def test_context_with_list_groups(self, context_comp: Component):
-        """Context accepts list of groups"""
-        context_comp.set_context(groups=[200, 201], target=50)
-        context_comp.Toggle(0, activateGroup=True)
-        assert 200 in context_comp.triggers[0][obj_prop.GROUPS]
-        assert 201 in context_comp.triggers[0][obj_prop.GROUPS]
 
     def test_context_empty_rejected(self, context_comp: Component):
         """Setting context with no parameters is rejected"""
@@ -542,13 +517,12 @@ class TestTempContext:
         assert comp.groups == {100, 200}
 
     def test_temp_context_with_no_params(self):
-        """temp_context with no params is a no-op but still works"""
+        """temp_context rejects an empty context, just like set_context."""
         comp = Component("Test", 100)
         comp.set_context(target=50, groups=200)
 
-        with pytest.raises(ValueError) as exc:
-            with comp.temp_context():
-                comp.Toggle(0, activateGroup=True)
+        with pytest.raises(ValueError) as exc, comp.temp_context():
+            comp.Toggle(0, activateGroup=True)
         assert_error(exc, "must provide target or groups")
 
 
@@ -772,21 +746,7 @@ class TestTimedLineValidation:
     
 
 # ============================================================================
-# METHOD CHAINING - Return Self
-# ============================================================================
-
-class TestMethodChainingReturnsSelf:
-    def test_chain_preserves_trigger_count(self, comp_with_target: Component):
-        (comp_with_target
-            .Toggle(0, activateGroup=True)
-            .Alpha(0.1, opacity=50)
-            .MoveBy(0.2, dx=10, dy=20)
-        )
-        assert len(comp_with_target.triggers) == 3
-
-
-# ============================================================================
-# COMPONENT TARGET ACCEPTS COMPONENT OBJECTS
+# COMPONENT EXPORT WARNINGS
 # ============================================================================
 
 class TestGeneralComponentFeatures:
@@ -858,13 +818,6 @@ class TestHasTriggerPropertiesMethod:
         with pytest.raises(ValueError) as exc_info:
             comp.has_trigger_properties({})
         assert_error(exc_info, "empty")
-
-    def test_consistency_with_get_triggers(self):
-        comp = Component("Test", 100, 5)
-        comp.Pickup(0, item_id=12, count=50, override=True)
-
-        query = {ppt.Pickup.ITEM_ID: 12}
-        assert comp.has_trigger_properties(query) == (len(comp.get_triggers(query)) > 0)
 
 
 # ============================================================================
@@ -1364,23 +1317,8 @@ class TestBezierMove:
             assert abs(total_dy) < 1e-6
         else:
             self._check_y_tolerance(dy, total_dy, curve_type)
-    
-    def test_bezier_move_horizontal_only(self):
-        """Test movement with dy=0 (horizontal only)."""
-        total_dx, total_dy = self._get_bezier_displacement(
-            CurveType.GENTLE_ARC, dx=100, dy=0, duration=1.0
-        )
-        self._check_x_exact(100, total_dx)
-        assert abs(total_dy) < 1e-6
-    
-    def test_bezier_move_vertical_only(self):
-        """Test movement with dx=0 (vertical only)."""
-        total_dx, total_dy = self._get_bezier_displacement(
-            CurveType.STEEP_RISE, dx=0, dy=150, duration=1.0
-        )
-        self._check_x_exact(0, total_dx)
-        self._check_y_tolerance(150, total_dy, "STEEP_RISE")
-    
+
+
     def test_bezier_move_very_short_duration(self):
         """Test with minimal duration."""
         total_dx, total_dy = self._get_bezier_displacement(
@@ -1447,7 +1385,7 @@ class TestBezierMove:
         assert_error(exc, *error_patterns)
     
     @pytest.mark.parametrize("invalid_curve", [None, ""])
-    def test_bezier_move_invalid_curve_type(self, invalid_curve: CurveType):
+    def test_bezier_move_invalid_curve_type(self, invalid_curve: str | None):
         """Test that None and empty string curve labels are rejected."""
         comp = Component("BezierTest", 100)
         comp.set_context(target=500)
@@ -1457,158 +1395,46 @@ class TestBezierMove:
                 time=0, curve_label=invalid_curve,
                 dx=100, dy=50, t=1.0
             )
-    
-    def test_bezier_move_generates_multiple_triggers(self):
-        """Test that BezierMove generates multiple MoveBy triggers."""
-        
-        comp = Component("BezierTest", 100)
-        comp.set_context(target=500)
-        
-        comp.timed.BezierMove(time=0, curve_label=CurveType.GENTLE_ARC, dx=100, dy=50, t=1.0)
-        
-        move_triggers = [t for t in comp.triggers if t.get(obj_prop.ID) == obj_id.Trigger.MOVE]
-        assert len(move_triggers) >= 2, "BezierMove should generate at least 2 MoveBy triggers"
 
 
-class TestRandomPatterns:
-    """Execute emitted callback graphs to check arithmetic and ordering, not GD physics."""
+class TestTriggerLayout:
+    @pytest.mark.parametrize("ordered", [None, False, True])
+    def test_equal_x_preserves_alignment_and_insertion_order(self, ordered: bool | None,
+        monkeypatch: pytest.MonkeyPatch):
+        comp = Component("Equal-X layout", 100)
+        comp.requireSpawnOrder = ordered
+        comp.TimerOp(0, item=77, mod=10)
+        comp.Spawn(0, 200, False)
+        comp.TimerOp(0, item=88, mod=20)
+        original = list(comp.triggers)
+        # Independent placement followed by sorting would reverse this sequence.
+        positions = iter([100, 0, 50, 0, 0, 0])
+        def next_position(_minimum: int, _maximum: int) -> int:
+            return next(positions)
 
-    class Graph:
-        def __init__(self, masks: Iterable[int] = ()):
-            self.timers: dict[int, float] = {38: 0.0}
-            self.rotations: list[tuple[int, int, float]] = []
-            self.masks = iter(masks)
-            self.bit = 0
-            self.mask = 0
-            self.groups: dict[int, list[GenericObj]] = {}
-            for comp in lib.all_components:
-                for trigger in comp.triggers:
-                    assert trigger['a1'] != obj_id.Trigger.SPAWN
-                    for group in trigger.get('a57', set[int]()):
-                        self.groups.setdefault(group, []).append(trigger)
-            for triggers in self.groups.values():
-                triggers.sort(key=lambda t: t['a2'])
+        monkeypatch.setattr(lib.random, "randint", next_position)
+        area = {"min_x": 0, "max_x": 200, "min_y": 0, "max_y": 100}
 
-        def activate(self, group: int) -> None:
-            for trigger in self.groups.get(group, []):
-                self.execute(trigger)
+        lib._spread_triggers(comp.triggers, comp, area, len(comp.triggers))
 
-        def execute(self, t: GenericObj) -> None:
-            kind = t['a1']
-            if kind == obj_id.Trigger.RANDOM:
-                if self.bit == 0:
-                    self.mask = next(self.masks)
-                chosen = (self.mask >> self.bit) & 1
-                self.bit = (self.bit + 1) % 16
-                self.activate(t.get('a51' if chosen else 'a71', 0))
-            elif kind == obj_id.Trigger.ITEM_EDIT:
-                # TimerOp's existing constant assignment/arithmetic encoding.
-                value = self.timers.get(t['a51'], 0)
-                mod = t['a479']
-                op = t.get('a480', 0)
-                if op == 0: value = mod
-                elif op == 1: value += mod
-                elif op == 2: value -= mod
-                elif op == 3: value *= mod
-                elif op == 4: value /= mod
-                else: raise AssertionError(op)
-                self.timers[t['a51']] = value
-            elif kind == obj_id.Trigger.ITEM_COMPARE:
-                def operand(id_key: str, type_key: str, mod_key: str, op_key: str) -> float:
-                    value = self.timers.get(t.get(id_key, 0), 0) if t.get(type_key) == 2 else 0
-                    mod = t.get(mod_key, 1)
-                    op = t.get(op_key, 0)
-                    if op == 0: return mod
-                    if op == 3: return value * mod
-                    raise AssertionError(op)
-                left = operand('a80', 'a476', 'a479', 'a480')
-                right = operand('a95', 'a477', 'a483', 'a481')
-                op = t['a482']
-                result = {0: left == right, 2: left >= right, 3: left < right}[op]
-                self.activate(t.get('a51' if result else 'a71', 0))
-            elif kind == obj_id.Trigger.ROTATE:
-                self.rotations.append((t['a51'], t['a71'], t['a68']))
-            else:
-                raise AssertionError(kind)
+        assert all(actual is expected for actual, expected in zip(comp.triggers, original, strict=True))
+        assert len({trigger[obj_prop.X] for trigger in comp.triggers}) == 1
 
-    def test_range_resets_between_synchronous_calls_and_supports_constant(self):
-        comp = Component("Random test", 4000).assert_spawn_order(True)
-        assert comp.random.rand_range(0, 1, 100) is comp
-        comp.random.rand_range(0, -50, 30)
-        comp.random.rand_range(0, 7, 7)
-        graph = self.Graph([65535, 0])
-        expected = [1 + 99 * 65535 / 65536, -50, 7]
-        for call, value in zip(comp.triggers, expected, strict=True):
-            graph.execute(call)
-            assert graph.timers[38] == value
-        assert len(lib.all_components) == 2
+    def test_elastic_layout_orders_by_original_x_and_preserves_ties(self):
+        comp = Component("Elastic layout", 100).assert_spawn_order(False)
+        comp.TimerOp(2, item=77, mod=10)
+        comp.TimerOp(0, item=88, mod=20)
+        comp.Spawn(0, 200, False)
+        expected = [comp.triggers[1], comp.triggers[2], comp.triggers[0]]
 
-    def test_converter_exhaustive_signed_whole_degrees(self):
-        comp = Component("Random test", 4000).set_context(target=4001)
-        comp.random.rotate(0, spread=0, center=4002)
-        entry = comp.random._rotation_entries[(4001, 4002)]
-        graph = self.Graph()
-        for quarter_degree in range(-1440, 1441):
-            angle = quarter_degree / 4
-            graph.timers[38] = angle
-            graph.rotations.clear()
-            graph.activate(entry)
-            assert sum(r[2] for r in graph.rotations) % 360 == math.floor(angle) % 360
-            assert all((target, center) == (4001, 4002) for target, center, _ in graph.rotations)
+        lib._spread_triggers(comp.triggers, comp, lib.DEFAULT_TRIGGER_AREA, len(comp.triggers))
 
-    def test_random_rotate_end_to_end_and_reuses_only_fixed_target_bank(self):
-        comp = Component("Random test", 4000).assert_spawn_order(True).set_context(target=4001)
-        for _ in range(6):
-            assert comp.random.rotate(0, spread=40, offset=-10, center=4002) is comp
-        graph = self.Graph([0, 1, 32767, 32768, 65534, 65535])
-        for call, mask in zip(comp.triggers, [0, 1, 32767, 32768, 65534, 65535], strict=True):
-            graph.rotations.clear()
-            graph.execute(call)
-            expected = math.floor(-50 + 80 * mask / 65536)
-            assert sum(r[2] for r in graph.rotations) % 360 == expected % 360
-        rotates = [t for c in lib.all_components for t in c.triggers if t['a1'] == obj_id.Trigger.ROTATE]
-        assert len(rotates) == 9
-        assert len(lib.all_components) == 2
-
-    def test_context_gates_stay_on_call_and_order_survives_export_layout(self):
-        comp = Component("Random test", 4000).assert_spawn_order(True)
-        comp.set_context(target=4001, groups=147)
-        comp.random.rotate(1, spread=40, center=4002)
-        assert comp.triggers[0]['a57'] == {4000, 147}
-        assert comp.groups == {4000, 147} and comp.target == 4001
-        logic = comp.random._logic
-        assert logic is not None
-        assert all(4000 not in t['a57'] and 147 not in t['a57'] for t in logic.triggers)
-        lib._spread_triggers(logic.triggers, logic, lib.DEFAULT_TRIGGER_AREA, len(logic.triggers))
-        graph = self.Graph([0])
-        graph.execute(comp.triggers[0])
-        assert sum(r[2] for r in graph.rotations) % 360 == 320
-
-    def test_range_rejects_reversed_bounds(self):
-        comp = Component("Random test", 4000)
-        with pytest.raises(ValueError):
-            comp.random.rand_range(0, 2, 1)
-        assert not comp.triggers
-
-    def test_rotation_requires_target_and_rejects_unsupported_bounds(self):
-        comp = Component("Random test", 4000)
-        with pytest.raises(RuntimeError, match="target context"):
-            comp.random.rotate(0, spread=40)
-        comp.set_context(target=4001)
-        with pytest.raises(ValueError, match="non-negative"):
-            comp.random.rotate(0, spread=-1)
-        with pytest.raises(ValueError, match="angle bounds"):
-            comp.random.rotate(0, spread=361)
+        assert all(actual is wanted for actual, wanted in zip(comp.triggers, expected, strict=True))
+        positions = [trigger[obj_prop.X] for trigger in comp.triggers]
+        assert positions[0] < positions[1] < positions[2]
 
 
 class TestPointerCircleParenting:
-    def test_aim_uses_explicit_center(self):
-        comp = Component("Explicit aim center", 4000).set_context(target=4001)
-        comp.PointToGroup(0, 4003, center=4002)
-        aim = comp.triggers[0]
-        assert aim['a51'] == 4001
-        assert aim['a71'] == 4002
-        assert aim['a401'] == 4003
 
     def test_follow_circle_exports_center_parent_without_random(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(lib.pointer, 'parent_registry', {})

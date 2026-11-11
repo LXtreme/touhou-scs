@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
-from gmdbuilder import ObjectType, new_obj, obj_id, obj_prop
+from gmdbuilder import new_obj, obj_id, obj_prop
 from gmdbuilder.classes import ItemCompare
 from gmdbuilder.object_types import EASING
 
 from touhou_scs import enums as enum, utils as util
 from touhou_scs.movements import CurveType, apply_bezier_movement
-from touhou_scs.types import GenericObj
 from touhou_scs.utils import unknown_g, warn
 
 if TYPE_CHECKING:
@@ -21,94 +20,77 @@ ppt = obj_prop.Trigger
 
 
 class RandomPatterns:
-    """Random ranges and synchronous binary rotation using scratch timer 38."""
-
-    TIMER_ID = 38
-    BITS = 16
-    _logic: Component | None = None
-    _rotation_entries: dict[tuple[int, int], int] = {}
+    BITS = 12
+    _rand_bits: dict[int, int] = {} # bit count -> shared bank caller
+    _range_entries: dict[tuple[float, float, int], int] = {}
+    _rng_storage: Component | None = None
 
     def __init__(self, component: Component):
         self._component = component
         self._range_group = 0
 
     @classmethod
-    def _storage(cls) -> Component:
-        from touhou_scs import lib
+    def _get_bit_bank(cls, bits: int) -> tuple[Component, int]:
+        """Get shared storage and the bank caller, creating them as needed."""
         from touhou_scs.component import Component
 
-        # A new build/test registry needs fresh triggers and group IDs.
-        if cls._logic is None or cls._logic not in lib.all_components:
-            cls._logic = Component("Random: RNG and binary rotates", unknown_g(), 6) \
-                .assert_spawn_order(True)
-            cls._rotation_entries = {}
-            entry = cls._logic.caller
-            cls._timer_op(entry, 0)
-            for bit in range(cls.BITS):
-                branch = unknown_g()
-                trigger = new_obj(obj_id.Trigger.RANDOM)
-                trigger[ppt.Random.TRUE_ID] = branch
-                trigger[ppt.Random.CHANCE] = 50
-                cls._emit(entry, trigger)
-                cls._timer_op(branch, 2 ** bit, enum.Item.MathOp.ADD)
-            cls._timer_op(entry, 2 ** cls.BITS, enum.Item.MathOp.DIVIDE)
-        return cls._logic
+        if cls._rng_storage is None:
+            cls._rng_storage = Component("Random timers", unknown_g()).assert_spawn_order(False)
+        storage = cls._rng_storage
+        if bits in cls._rand_bits:
+            return cls._rng_storage, cls._rand_bits[bits]
+        
+        caller = unknown_g()
+        with storage.temp_context(groups=caller, include_caller=False):
+            for bit in range(bits):
+                take = unknown_g()
+                flip = new_obj(obj_id.Trigger.RANDOM)
+                flip[ppt.Random.CHANCE] = 50
+                flip[ppt.Random.TRUE_ID] = take
+                storage.TriggerFromObj(bit, flip)
+                with storage.temp_context(groups=take, include_caller=False):
+                    storage.TimerOp(0, item=enum.EMPTY1, mod=2 ** bit, sign=enum.Item.MathOp.ADD)
+        cls._rand_bits[bits] = caller
+        
+        return storage, cls._rand_bits[bits]
 
-    @classmethod
-    def _emit(cls, groups: int | set[int], trigger: GenericObj | ObjectType):
-        assert cls._logic is not None
-        # Explicit X order survives export. Callback groups are NOT Spawn Ordered,
-        # so these distances enforce order without introducing internal delays.
-        time = len(cls._logic.triggers) * 2 / enum.PLR_SPEED
-        with cls._logic.temp_context(groups=groups, include_caller=False):
-            cls._logic.TriggerFromObj(time, trigger)
-
-    @classmethod
-    def _timer_op(cls, groups: int | set[int], value: float,
-        operation: enum.Item.MathOp = enum.Item.MathOp.ASSIGN):
-        logic = cls._logic
-        assert logic is not None
-        with logic.temp_context(groups=groups, include_caller=False):
-            logic.TimerOp(len(logic.triggers) * 2 / enum.PLR_SPEED,
-                item=cls.TIMER_ID, mod=value, sign=operation)
-
-    @classmethod
-    def _compare(cls, groups: int | set[int], expression: str, true_id: int, false_id: int = 0):
-        compare = ItemCompare().set_from_string(expression)
-        compare.true_id = true_id
-        compare.false_id = false_id
-        compare.tolerance = 0
-        cls._emit(groups, compare.obj)
-
-    @staticmethod
-    def _call(component: Component, time: float, group: int):
-        # An always-true comparison is the synchronous entry point, not a Spawn.
-        compare = ItemCompare().set_from_string("i38 == i38")
-        compare.true_id = group
-        compare.tolerance = 0
-        component.TriggerFromObj(time, compare.obj)
-
-    def rand_range(self, time: float, minimum: float, maximum: float) -> Component:
-        """Write a fresh 16-bit uniform sample in [minimum, maximum) to TIMER 38.
-
-        Equal bounds produce that constant. Returns the parent Component for
-        chaining. Uses one scratch timer shared by all synchronous calls.
+    def rand_timer(self, time: float, minimum: float, maximum: float, *, 
+        t: int, bits: int = BITS):
         """
-        if minimum > maximum:
-            raise ValueError("rand_range: minimum must not exceed maximum")
+        Write a bits-bit random sample in [minimum, maximum) to timer 't'.
 
-        logic = self._storage()
-        entry = unknown_g()
-        self._range_group = entry
+        Entries are shared by (minimum, maximum, bits), with a remapped output timer.
+        The Spawn entry may add latency; arithmetic uses synchronous callbacks.
+        """
+        from touhou_scs.component import validate_params
 
-        if minimum == maximum:
-            self._timer_op(entry, minimum)
-        else:
-            self._compare(entry, "i38 == i38", logic.caller) # always true (for 0-tick spawn)
-            self._timer_op(entry, maximum - minimum, enum.Item.MathOp.MULTIPLY)
-            self._timer_op(entry, minimum, enum.Item.MathOp.ADD)
+        validate_params(item_id=t)
+        # Larger raw samples exceed GD's timer assignment limit (9,999,999).
+        if not 1 <= bits <= 23:
+            raise ValueError("rand_timer: bits must be between 1 and 23")
+        if not minimum < maximum:
+            raise ValueError("rand_timer: minimum must be less than maximum")
 
-        self._call(self._component, time, entry)
+        key = (minimum, maximum, bits)
+        if key not in self._range_entries:
+            storage, bank = self._get_bit_bank(bits)
+            entry = unknown_g()
+            sample = ItemCompare().set_from_string("0 == 0")
+            sample.true_id = bank
+
+            # Normalize separately: Item Edit modifiers retain only three decimals.
+            with storage.temp_context(groups=entry, include_caller=False):
+                storage.TimerOp(0, item=enum.EMPTY1, mod=0)
+                storage.TriggerFromObj(1, sample.obj)
+                storage.TimerOp(2, item=enum.EMPTY1, mod=2 ** bits, sign=enum.Item.MathOp.DIVIDE)
+                storage.TimerOp(3, item=enum.EMPTY1, mod=maximum - minimum,
+                    sign=enum.Item.MathOp.MULTIPLY)
+                if minimum != 0:
+                    storage.TimerOp(4, item=enum.EMPTY1, mod=minimum, sign=enum.Item.MathOp.ADD)
+            self._range_entries[key] = entry
+
+        entry = self._range_entries[key]
+        self._component.Spawn(time, entry, False, remap={enum.EMPTY1: t})
         return self._component
 
     @classmethod
