@@ -628,7 +628,8 @@ def _spread_triggers(triggers: list[GenericObj], comp: ComponentProtocol, trigge
             pointer_obj[obj_prop.Y] = random.randint(min_y, max_y)
         return
 
-    if all_keyframe_objs:
+    if all_keyframe_objs or (all_same_x and not comp.requireSpawnOrder):
+        # Keep equal-X triggers together; insertion order can determine execution.
         rand_x = random.randint(min_x, max_x)
         rand_y = random.randint(min_y, max_y)
         for keyframe_obj in triggers:
@@ -636,13 +637,7 @@ def _spread_triggers(triggers: list[GenericObj], comp: ComponentProtocol, trigge
             keyframe_obj[obj_prop.Y] = rand_y
         return
 
-    if all_same_x and not comp.requireSpawnOrder:
-        # No spawn order because all_same_x suggests spawn order isnt intended
-        for trigger in triggers:
-            trigger[obj_prop.X] = random.randint(min_x // 2, max_x // 2) * 2
-            trigger[obj_prop.Y] = random.randint(min_y, max_y)
-        triggers.sort(key=lambda t: t.get(obj_prop.X, 0))
-    elif comp.requireSpawnOrder:
+    if comp.requireSpawnOrder:
         # Rigid chain - maintain exact spacing (ordered spawn)
         triggers.sort(key=lambda t: t.get(obj_prop.X, 0))
         chain_min_x = triggers[0].get(obj_prop.X, 0)
