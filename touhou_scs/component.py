@@ -316,7 +316,7 @@ class Component:
         return self
 
     def MoveTowards(self, time: float, targetDir: int, *,
-        t: float, dist: int,
+        t: float, dist: float,
         type: EASING = 0, rate: float = 1.0, dynamic: bool = False):
         """Move target a set distance towards another group (direction mode)"""
         validate_params(targets=[self.target, targetDir], non_negative=t, type=type, rate=rate)

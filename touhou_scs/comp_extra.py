@@ -22,7 +22,7 @@ ppt = obj_prop.Trigger
 
 
 class RandomPatterns:
-    BITS = 12
+    BITS = 10
     _rand_bits: dict[int, int] = {} # bit count -> shared bank caller
     _range_entries: dict[tuple[float, float, int], int] = {}
     _rng_storage: Component | None = None
@@ -31,7 +31,7 @@ class RandomPatterns:
 
     def __init__(self, component: Component):
         self._component = component
-        self._rotate_timers = cycle(range(60, 80)) # scratch timer IDs
+        self._temp_timers = cycle(range(60, 80)) # scratch timer IDs
 
     @classmethod
     def _get_bit_bank(cls, bits: int) -> tuple[Component, int]:
@@ -102,7 +102,7 @@ class RandomPatterns:
         validate_params(item_id=t)
         _, entry = self._get_range_entry(minimum, maximum, bits)
         if t is None:
-            t = next(self._rotate_timers)
+            t = next(self._temp_timers)
         self._component.Spawn(time, entry, False, remap={enum.EMPTY1: t})
         return self._component
 
@@ -113,14 +113,14 @@ class RandomPatterns:
 
         converter, wrap = unknown_g(), unknown_g()
         timer = enum.EMPTY1
-        units_per_degree = 10
-        full_turn = 360 * units_per_degree
+        UNITS_PER_DEGREE = 5
+        full_turn = 360 * UNITS_PER_DEGREE
         with storage.temp_context(groups=wrap, include_caller=False):
             storage.TimerOp(0, item=timer, mod=full_turn, sign=enum.Item.MathOp.ADD)
 
         # Use integer weights in tenths. Wrap negatives to avoid a second bank.
         with storage.temp_context(groups=converter, include_caller=False):
-            storage.TimerOp(0, item=timer, mod=units_per_degree, sign=enum.Item.MathOp.MULTIPLY)
+            storage.TimerOp(0, item=timer, mod=UNITS_PER_DEGREE, sign=enum.Item.MathOp.MULTIPLY)
             cls._compare(storage, 1, f"t{timer} < 0", wrap)
             for bit in range(full_turn.bit_length() - 1, -1, -1):
                 weight = 2 ** bit
@@ -128,19 +128,17 @@ class RandomPatterns:
                 cls._compare(storage, full_turn.bit_length() + 1 - bit, f"t{timer} >= {weight}", take)
                 with storage.temp_context(groups=take, target=enum.EMPTY_TARGET_GROUP, include_caller=False):
                     storage.TimerOp(0, item=timer, mod=weight, sign=enum.Item.MathOp.SUBTRACT)
-                    storage.Rotate(1, angle=weight / units_per_degree, center=enum.EMPTY2)
+                    storage.Rotate(1, angle=weight / UNITS_PER_DEGREE, center=enum.EMPTY2)
 
         cls._rotation_converter = converter
         return converter
 
-    def rotate(self, time: float, *, spread: float, offset: float = 0, center: int | None = None,
-        t: int | None = None, bits: int = BITS) -> Component:
+    def rotate(self, time: float, *, spread: float, offset: float = 0, 
+        center: int | None = None, timer: int | None = None, bits: int = BITS):
         """Add a random angle in [offset - spread, offset + spread).
 
-        Bounds must lie within [-360, 360]. Sampled angles round down to tenths
-        of a degree. For nonzero spread, the lower bound and range width must
-        be multiples of 0.001 degrees so Item Edit can store them exactly.
-        The converter consumes t or a scratch timer if omitted.
+        Bounds must lie within [-360, 360]. Sampled angles round down to fifths of a degree.
+        The converter consumes timer or a scratch timer if omitted.
         Aim explicitly before calling when you need an absolute reference.
 
         Tick Interval Reliability [limits may need more testing]:
@@ -151,7 +149,7 @@ class RandomPatterns:
         target = self._component.target
         if center is None:
             center = target
-        validate_params(targets=[target, center], non_negative=spread, item_id=t)
+        validate_params(targets=[target, center], non_negative=spread, item_id=timer)
 
         minimum = offset - spread
         maximum = offset + spread
@@ -182,9 +180,15 @@ class RandomPatterns:
                 self._compare(storage, 1, "0 == 0", converter)
             self._rotate_entries[key] = entry
 
-        t = t or next(self._rotate_timers)
+        timer = timer or next(self._temp_timers)
         self._component.Spawn(time, self._rotate_entries[key], False, 
-            remap={enum.EMPTY1: t, enum.EMPTY_TARGET_GROUP: target, enum.EMPTY2: center})
+            remap={enum.EMPTY1: timer, enum.EMPTY_TARGET_GROUP: target, enum.EMPTY2: center})
+        return self._component
+
+    def move(self, time: float, *, p1: tuple[float, float], p2: tuple[float, float], 
+        bits: int = BITS, timer: int | None = None):
+        """Instant random position between two points up to 0.5 precision."""
+
         return self._component
 
 

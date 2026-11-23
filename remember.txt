@@ -47,6 +47,8 @@ Endboss: ??? (alien shapeshifter that has spells from other characters (maybe pr
 
 TODO:
 
+- assertSpawnOrder rename to 'ordered' parameter? maybe have 'spawn with spawn_ordered only' as a force that it cant be activated by anything other than a spawn trigger with spawnOrdered=True (or false). idk if actually reasonably enforcable. maybe assertSpawnOrder becomes assertSpawnOrdered, where None allows any, True forces spawnOrdered=True and False forces spawnOrdered=False?
+
 - Minor Optimization: Cache 'enforce_solid_groups' if used multiple times for the same groups
 
 - Optimization: set explicit 'follow rotate' and 'follow' instead of assuming both, to cut down on triggers.
@@ -63,8 +65,6 @@ TODO:
 
 - Find out if its possible to have the entire enemy attack comp use placeholder emitters
 (current verdict: not possible cuz spawn limit)
-
-- Add Item pickups (power, bomb, score)
 
 - Minor Optimization: Use Keyframe Anim's time-mod or scale-mod to possibly re-use keyframe components. This will depend on t/hold timing or scaling ratios.
 
