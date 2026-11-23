@@ -21,17 +21,17 @@ if TYPE_CHECKING:
 ppt = obj_prop.Trigger
 
 
-class RandomPatterns:
+class RandomFunctions:
     BITS = 10
     _rand_bits: dict[int, int] = {} # bit count -> shared bank caller
     _range_entries: dict[tuple[float, float, int], int] = {}
     _rng_storage: Component | None = None
     _rotate_entries: dict[tuple[float, float, int], int] = {}
     _rotation_converter: int | None = None
-
+    _temp_timers = cycle(range(60, 80)) # scratch timer IDs
+    
     def __init__(self, component: Component):
         self._component = component
-        self._temp_timers = cycle(range(60, 80)) # scratch timer IDs
 
     @classmethod
     def _get_bit_bank(cls, bits: int) -> tuple[Component, int]:
@@ -91,7 +91,7 @@ class RandomPatterns:
         storage.TriggerFromObj(time, compare.obj)
 
     def rand_timer(self, time: float, minimum: float, maximum: float, *,
-        t: int | None = None, bits: int = BITS) -> Component:
+        t: int = 0, bits: int = BITS) -> Component:
         """Write a sample in [minimum, maximum) to timer t.
 
         Omit t to cycle through scratch timers 60-79 during generation.
@@ -99,10 +99,9 @@ class RandomPatterns:
         """
         from touhou_scs.component import validate_params
 
+        t = t or next(self._temp_timers)
         validate_params(item_id=t)
         _, entry = self._get_range_entry(minimum, maximum, bits)
-        if t is None:
-            t = next(self._temp_timers)
         self._component.Spawn(time, entry, False, remap={enum.EMPTY1: t})
         return self._component
 
@@ -134,7 +133,7 @@ class RandomPatterns:
         return converter
 
     def rotate(self, time: float, *, spread: float, offset: float = 0, 
-        center: int | None = None, timer: int | None = None, bits: int = BITS):
+        center: int | None = None, timer: int = 0, bits: int = BITS):
         """Add a random angle in [offset - spread, offset + spread).
 
         Bounds must lie within [-360, 360]. Sampled angles round down to fifths of a degree.
@@ -147,6 +146,7 @@ class RandomPatterns:
         from touhou_scs.component import enforce_solid_groups, validate_params
 
         target = self._component.target
+        timer = timer or next(self._temp_timers)
         if center is None:
             center = target
         validate_params(targets=[target, center], non_negative=spread, item_id=timer)
@@ -180,14 +180,19 @@ class RandomPatterns:
                 self._compare(storage, 1, "0 == 0", converter)
             self._rotate_entries[key] = entry
 
-        timer = timer or next(self._temp_timers)
         self._component.Spawn(time, self._rotate_entries[key], False, 
             remap={enum.EMPTY1: timer, enum.EMPTY_TARGET_GROUP: target, enum.EMPTY2: center})
         return self._component
 
-    def move(self, time: float, *, p1: tuple[float, float], p2: tuple[float, float], 
-        bits: int = BITS, timer: int | None = None):
-        """Instant random position between two points up to 0.5 precision."""
+    def moveBy(self, time: float, *, p1: tuple[int, int], p2: tuple[int, int], 
+        bits: int = BITS, timer: int = 0):
+        """
+        Move by a random offset within the rectangle p1 and p2, relative to the target.
+        
+        X and Y are sampled independently in 0.5-unit steps.
+        """
+        timer = timer or next(self._temp_timers)
+        # -rand move implementation- 
 
         return self._component
 
