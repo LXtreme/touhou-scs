@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from itertools import cycle
 from typing import Any, TYPE_CHECKING
 
 from gmdbuilder import new_obj, obj_id, obj_prop
@@ -24,10 +26,12 @@ class RandomPatterns:
     _rand_bits: dict[int, int] = {} # bit count -> shared bank caller
     _range_entries: dict[tuple[float, float, int], int] = {}
     _rng_storage: Component | None = None
+    _rotate_entries: dict[tuple[float, float, int], int] = {}
+    _rotation_converter: int | None = None
 
     def __init__(self, component: Component):
         self._component = component
-        self._range_group = 0
+        self._rotate_timers = cycle(range(60, 80)) # scratch timer IDs
 
     @classmethod
     def _get_bit_bank(cls, bits: int) -> tuple[Component, int]:
@@ -35,10 +39,10 @@ class RandomPatterns:
         from touhou_scs.component import Component
 
         if cls._rng_storage is None:
-            cls._rng_storage = Component("Random timers", unknown_g()).assert_spawn_order(False)
+            cls._rng_storage = Component("Random: Shared Triggers", 0).assert_spawn_order(False)
         storage = cls._rng_storage
         if bits in cls._rand_bits:
-            return cls._rng_storage, cls._rand_bits[bits]
+            return storage, cls._rand_bits[bits]
         
         caller = unknown_g()
         with storage.temp_context(groups=caller, include_caller=False):
@@ -52,107 +56,135 @@ class RandomPatterns:
                     storage.TimerOp(0, item=enum.EMPTY1, mod=2 ** bit, sign=enum.Item.MathOp.ADD)
         cls._rand_bits[bits] = caller
         
-        return storage, cls._rand_bits[bits]
+        return storage, caller
 
-    def rand_timer(self, time: float, minimum: float, maximum: float, *, 
-        t: int, bits: int = BITS):
-        """
-        Write a bits-bit random sample in [minimum, maximum) to timer 't'.
-
-        Entries are shared by (minimum, maximum, bits), with a remapped output timer.
-        The Spawn entry may add latency; arithmetic uses synchronous callbacks.
-        """
-        from touhou_scs.component import validate_params
-
-        validate_params(item_id=t)
+    @classmethod
+    def _get_range_entry(cls, minimum: float, maximum: float, bits: int) -> tuple[Component, int]:
         # Larger raw samples exceed GD's timer assignment limit (9,999,999).
         if not 1 <= bits <= 23:
             raise ValueError("rand_timer: bits must be between 1 and 23")
         if not minimum < maximum:
             raise ValueError("rand_timer: minimum must be less than maximum")
 
+        storage, bank = cls._get_bit_bank(bits)
         key = (minimum, maximum, bits)
-        if key not in self._range_entries:
-            storage, bank = self._get_bit_bank(bits)
-            entry = unknown_g()
-            sample = ItemCompare().set_from_string("0 == 0")
-            sample.true_id = bank
+        if key in cls._range_entries:
+            return storage, cls._range_entries[key]
 
-            # Normalize separately: Item Edit modifiers retain only three decimals.
-            with storage.temp_context(groups=entry, include_caller=False):
-                storage.TimerOp(0, item=enum.EMPTY1, mod=0)
-                storage.TriggerFromObj(1, sample.obj)
-                storage.TimerOp(2, item=enum.EMPTY1, mod=2 ** bits, sign=enum.Item.MathOp.DIVIDE)
-                storage.TimerOp(3, item=enum.EMPTY1, mod=maximum - minimum,
-                    sign=enum.Item.MathOp.MULTIPLY)
-                if minimum != 0:
-                    storage.TimerOp(4, item=enum.EMPTY1, mod=minimum, sign=enum.Item.MathOp.ADD)
-            self._range_entries[key] = entry
+        entry = unknown_g()
+        # Normalize separately: Item Edit modifiers retain only three decimals.
+        with storage.temp_context(groups=entry, include_caller=False):
+            storage.TimerOp(0, item=enum.EMPTY1, mod=0)
+            cls._compare(storage, 1, "0 == 0", bank)
+            storage.TimerOp(2, item=enum.EMPTY1, mod=2 ** bits, sign=enum.Item.MathOp.DIVIDE)
+            storage.TimerOp(3, item=enum.EMPTY1, mod=maximum - minimum, sign=enum.Item.MathOp.MULTIPLY)
+            if minimum != 0:
+                storage.TimerOp(4, item=enum.EMPTY1, mod=minimum, sign=enum.Item.MathOp.ADD)
+        cls._range_entries[key] = entry
+        return storage, entry
 
-        entry = self._range_entries[key]
+    @staticmethod
+    def _compare(storage: Component, time: float, expression: str, on_true: int) -> None:
+        compare = ItemCompare().set_from_string(expression)
+        compare.true_id = on_true
+        compare.tolerance = 0
+        storage.TriggerFromObj(time, compare.obj)
+
+    def rand_timer(self, time: float, minimum: float, maximum: float, *,
+        t: int | None = None, bits: int = BITS) -> Component:
+        """Write a sample in [minimum, maximum) to timer t.
+
+        Omit t to cycle through scratch timers 60-79 during generation.
+        Use an explicit timer when the value must outlive scratch reuse.
+        """
+        from touhou_scs.component import validate_params
+
+        validate_params(item_id=t)
+        _, entry = self._get_range_entry(minimum, maximum, bits)
+        if t is None:
+            t = next(self._rotate_timers)
         self._component.Spawn(time, entry, False, remap={enum.EMPTY1: t})
         return self._component
 
     @classmethod
-    def _rotation_entry(cls, target: int, center: int) -> int:
-        logic = cls._storage()
-        key = (target, center)
-        if key in cls._rotation_entries:
-            return cls._rotation_entries[key]
+    def _get_rotation_converter(cls, storage: Component) -> int:
+        if cls._rotation_converter is not None:
+            return cls._rotation_converter
 
-        entry, negative, check = unknown_g(), unknown_g(), unknown_g()
-        cls._rotation_entries[key] = entry
-        cls._compare(entry, "t38 < 0", negative, check)
-        # One full turn makes negative angles nonnegative without another timer
-        # or a separate bank of negative Rotate triggers.
-        cls._timer_op(negative, 360, enum.Item.MathOp.ADD)
-        previous_take = None
-        for weight in (256, 128, 64, 32, 16, 8, 4, 2, 1):
-            take = unknown_g()
-            next_check = unknown_g() if weight > 1 else 0
-            groups = {check}
-            if previous_take is not None:
-                groups.add(previous_take)
-            else:
-                groups.add(negative)
-            cls._compare(groups, f"t38 >= {weight}", take, next_check)
-            if next_check:
-                cls._timer_op(take, weight, enum.Item.MathOp.SUBTRACT)
+        converter, wrap = unknown_g(), unknown_g()
+        timer = enum.EMPTY1
+        units_per_degree = 10
+        full_turn = 360 * units_per_degree
+        with storage.temp_context(groups=wrap, include_caller=False):
+            storage.TimerOp(0, item=timer, mod=full_turn, sign=enum.Item.MathOp.ADD)
 
-            # Explicit X order survives export. Callback groups are NOT Spawn Ordered,
-            # so these distances enforce order without introducing internal delays.
-            time = len(logic.triggers) * 2 / enum.PLR_SPEED
-            with logic.temp_context(groups=take, target=target, include_caller=False):
-                logic.Rotate(time, angle=weight, center=center, t=0)
+        # Use integer weights in tenths. Wrap negatives to avoid a second bank.
+        with storage.temp_context(groups=converter, include_caller=False):
+            storage.TimerOp(0, item=timer, mod=units_per_degree, sign=enum.Item.MathOp.MULTIPLY)
+            cls._compare(storage, 1, f"t{timer} < 0", wrap)
+            for bit in range(full_turn.bit_length() - 1, -1, -1):
+                weight = 2 ** bit
+                take = unknown_g()
+                cls._compare(storage, full_turn.bit_length() + 1 - bit, f"t{timer} >= {weight}", take)
+                with storage.temp_context(groups=take, target=enum.EMPTY_TARGET_GROUP, include_caller=False):
+                    storage.TimerOp(0, item=timer, mod=weight, sign=enum.Item.MathOp.SUBTRACT)
+                    storage.Rotate(1, angle=weight / units_per_degree, center=enum.EMPTY2)
 
-            check, previous_take = next_check, take
-        return entry
+        cls._rotation_converter = converter
+        return converter
 
-    def rotate(self, time: float, *, spread: float, offset: float = 0, center: int | None = None) -> Component:
-        """Add random(offset - spread, offset + spread) to the current angle.
+    def rotate(self, time: float, *, spread: float, offset: float = 0, center: int | None = None,
+        t: int | None = None, bits: int = BITS) -> Component:
+        """Add a random angle in [offset - spread, offset + spread).
 
-        Uses the current target context and a reusable Rotate bank per target /
-        center pair. Bounds must lie within [-360, 360]. The sampled angle is
-        rounded down to whole-degree steps (error < 1 degree); timer 38 is
-        consumed by the converter. Normalize/aim explicitly before calling.
+        Bounds must lie within [-360, 360]. Sampled angles round down to tenths
+        of a degree. For nonzero spread, the lower bound and range width must
+        be multiples of 0.001 degrees so Item Edit can store them exactly.
+        The converter consumes t or a scratch timer if omitted.
+        Aim explicitly before calling when you need an absolute reference.
+
+        Tick Interval Reliability [limits may need more testing]:
+        4 ticks between rerolls, Rotate Follow mode 2 tick after initial time.
         """
         from touhou_scs.component import enforce_solid_groups, validate_params
 
         target = self._component.target
         if center is None:
             center = target
-        validate_params(targets=[target, center], non_negative=spread)
-        enforce_solid_groups(target, center)
+        validate_params(targets=[target, center], non_negative=spread, item_id=t)
 
         minimum = offset - spread
         maximum = offset + spread
-        if minimum < -360 or maximum > 360:
+        if not -360 <= minimum <= maximum <= 360:
             raise ValueError("random.rotate: angle bounds must lie within [-360, 360]")
-        
-        self.rand_range(time, minimum, maximum)
-        converter = self._rotation_entry(target, center)
-        self._compare(self._range_group, "i38 == i38", converter)
 
+        # Check the two stored modifiers before binary float subtraction
+        # can make an exact decimal input appear to exceed GD's precision.
+        decimal_spread = Decimal(str(spread))
+        lower_bound = Decimal(str(offset)) - decimal_spread
+        width = 2 * decimal_spread
+        precision = Decimal("0.001")
+        if lower_bound % precision or width % precision:
+            raise ValueError(
+                "random.rotate: the lower bound and range width must be multiples of "
+                "0.001 degrees (Item Edit modifier precision)"
+            )
+
+        enforce_solid_groups(target, center)
+
+        key = (minimum, maximum, bits)
+        if key not in self._rotate_entries:
+            storage, rng_entry = self._get_range_entry(minimum, maximum, bits)
+            converter = self._get_rotation_converter(storage)
+            entry = unknown_g()
+            with storage.temp_context(groups=entry, include_caller=False):
+                self._compare(storage, 0, "0 == 0", rng_entry)
+                self._compare(storage, 1, "0 == 0", converter)
+            self._rotate_entries[key] = entry
+
+        t = t or next(self._rotate_timers)
+        self._component.Spawn(time, self._rotate_entries[key], False, 
+            remap={enum.EMPTY1: t, enum.EMPTY_TARGET_GROUP: target, enum.EMPTY2: center})
         return self._component
 
 
