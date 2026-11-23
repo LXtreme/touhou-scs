@@ -11,8 +11,10 @@ PLR_HURTBOX = 2
 PLR_GRAZE_HURTBOX = 3
 BOMB_HITBOX = 4
 GRAZE_FUNCTION = 34
-PLR_HURT_FUNCTION = 35
-DESPAWN_FUNCTION = 27 #PLR_HURT calls despawn in level, BOMB_HURT calls directly in code
+PLR_HIT_FUNCTION = 35
+DESPAWN_FUNCTION = 27 # Called by bomb collisions and the hand-authored player-hit function
+# Keep this group empty so an unremapped enemy body hit has no collision to disable.
+DESPAWN_COLLISION_PLACEHOLDER = unknown_g()
 ENEMY_HITBOX = 5 # shared for every enemy
 GLOBAL_COLLISIONS = 17
 
@@ -91,15 +93,19 @@ def add_plr_collisions():
 
         for bullet_hitbox in range(bullet.min_group, bullet.max_group + 1):
             bullet_col = bullet_hitbox + (bullet.max_group - bullet.min_group + 1)
+            despawn_remap = {
+                enum.EMPTY_BULLET: bullet_hitbox,
+                DESPAWN_COLLISION_PLACEHOLDER: bullet_col,
+            }
             # permanently turns on all collisions for each bullet (level calls it on startup)
             global_col_spawn = global_col.create_trigger(obj_id.Trigger.SPAWN, 0)
             global_col_spawn[ppt.Spawn.TARGET_ID] = cols.caller
-            global_col_spawn[ppt.Spawn.REMAPS] = { enum.EMPTY_BULLET: bullet_hitbox }
+            global_col_spawn[ppt.Spawn.REMAPS] = despawn_remap
             # Give each bullet a spawn trigger that activates its own collisions
             with plr_hit_col.temp_context(groups={bullet_hitbox, bullet_col}):
                 plr_hit_col_spawn = plr_hit_col.create_trigger(obj_id.Trigger.SPAWN, 0)
-                plr_hit_col_spawn[ppt.Spawn.TARGET_ID] = PLR_HURT_FUNCTION
-                plr_hit_col_spawn[ppt.Spawn.REMAPS] = { enum.EMPTY_BULLET: bullet_hitbox }
+                plr_hit_col_spawn[ppt.Spawn.TARGET_ID] = PLR_HIT_FUNCTION
+                plr_hit_col_spawn[ppt.Spawn.REMAPS] = despawn_remap
 
     # DO NOT use the bullet pool registry because that includes pickups
     # TODO: make separate registries for player bullets and pickups
@@ -112,7 +118,7 @@ def add_plr_collisions():
         .assert_spawn_order(False)
         # WARNING: its using empties without remaps
         # (since not remapping PLR_HIT_FUNCTION and therefore not remapping DESPAWN_FUNCTION)
-        .set_context(target=PLR_HURT_FUNCTION)
+        .set_context(target=PLR_HIT_FUNCTION)
             .Collision(0, blockA=ENEMY_HITBOX, blockB=PLR_HURTBOX, activateGroup=True)
         .clear_context()
         .set_context(target=GRAZE_FUNCTION)
@@ -399,6 +405,13 @@ def add_pickup_collisions():
 
 despawn1 = (Component("EnemyBullet Despawn 1", unknown_g(), editorLayer=6)
     .assert_spawn_order(True)
+    .set_context(target=DESPAWN_COLLISION_PLACEHOLDER)
+    # done multiple times to more likely catch edge case
+    # of turning on collision during spawning while bullet despawn already started
+        .Toggle(0, False)
+        .Toggle(0.25, False)
+        .Toggle(0.5, False)
+        .Toggle(0.75, False)
     .set_context(target=enum.EMPTY_BULLET)
         .Scale(0, factor=0.25, hold=0.01, t=1, type=enum.Easing.ELASTIC_IN_OUT, rate=1.2)
         .Alpha(0, t=1, opacity=0)
